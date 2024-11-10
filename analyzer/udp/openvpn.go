@@ -1,8 +1,8 @@
 package udp
 
 import (
-	"github.com/apernet/OpenGFW/analyzer"
-	"github.com/apernet/OpenGFW/analyzer/utils"
+	"github.com/uQUIC/XGFW/analyzer"
+	"github.com/uQUIC/XGFW/analyzer/utils"
 )
 
 var (
