@@ -1,6 +1,6 @@
 package tcp
 
-import "github.com/apernet/OpenGFW/analyzer"
+import "github.com/uQUIC/XGFW/analyzer"
 
 var _ analyzer.TCPAnalyzer = (*FETAnalyzer)(nil)
 
