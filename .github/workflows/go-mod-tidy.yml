@@ -1,10 +1,10 @@
-name: Go Mod Tidy and Commit
+name: Go Mod Tidy and PR
 
 on:
   push:
     branches:
-      - main  # 或其他你希望触发的分支
-  workflow_dispatch:  # 添加手动触发事件
+      - main  # 或其他希望自动触发的分支
+  workflow_dispatch:  # 手动触发
 
 jobs:
   go-mod-tidy:
@@ -13,12 +13,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v2
         with:
-          fetch-depth: 0  # 需要完整的 git history 以便提交更改
+          fetch-depth: 0  # 获取完整的历史记录，以便创建新分支
 
       - name: Set up Go
         uses: actions/setup-go@v3
         with:
-          go-version: '1.x'  # 指定你的 Go 版本
+          go-version: '1.x'  # 设置 Go 版本
 
       - name: Run go mod tidy
         run: go mod tidy
@@ -32,11 +32,28 @@ jobs:
             echo "has_changes=false" >> $GITHUB_ENV
           fi
 
-      - name: Commit and push changes
+      - name: Create new branch
+        if: env.has_changes == 'true'
+        run: |
+          branch_name="auto-go-mod-tidy-$(date +%s)"
+          git checkout -b "$branch_name"
+          echo "branch_name=$branch_name" >> $GITHUB_ENV
+
+      - name: Commit changes
         if: env.has_changes == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add .
           git commit -m "chore: run go mod tidy"
-          git push
+          git push -u origin "$branch_name"
+
+      - name: Create Pull Request
+        if: env.has_changes == 'true'
+        uses: peter-evans/create-pull-request@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: ${{ env.branch_name }}
+          title: "chore: run go mod tidy"
+          body: "This PR was created automatically by a GitHub Action to tidy up the Go modules."
+          base: main  # 修改为你的目标分支
