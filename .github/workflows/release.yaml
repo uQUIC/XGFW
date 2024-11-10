@@ -1,0 +1,57 @@
+name: Release
+on:
+  release:
+    types: [published]
+  workflow_dispatch: # Allows manual triggering of the workflow
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  releases-matrix:
+    name: Release Go Binary
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goos: [linux]
+        goarch: ["386", amd64, arm64]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      # Ensure a tag exists, create one if running manually
+      - name: Ensure Git Tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            # Create a new tag based on the current date-time or use latest commit SHA
+            TAG="manual-$(date +'%Y%m%d%H%M%S')"
+            git tag "$TAG"
+            git push origin "$TAG"
+          else
+            TAG="${{ github.ref_name }}"
+          fi
+          echo "::set-output name=TAG::$TAG"
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          mkdir -p build
+          OUTPUT_NAME="OpenGFW-${GOOS}-${GOARCH}"
+          go build -o build/$OUTPUT_NAME -ldflags "-s -w" .
+          zip -j build/${OUTPUT_NAME}.zip build/$OUTPUT_NAME
+
+      - name: Upload
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/*.zip # Uploads each individual zip file
+          tag_name: ${{ steps.tag.outputs.TAG }}
