@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/apernet/OpenGFW/ruleset/builtins/geo/v2geo"
+	"github.com/uQUIC/XGFW/ruleset/builtins/geo/v2geo"
 )
 
 var _ hostMatcher = (*geoipMatcher)(nil)
