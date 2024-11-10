@@ -6,7 +6,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/apernet/OpenGFW/ruleset/builtins/geo/v2geo"
+	"github.com/uQUIC/XGFW/ruleset/builtins/geo/v2geo"
 )
 
 const (
