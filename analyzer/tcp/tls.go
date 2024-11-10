@@ -1,9 +1,9 @@
 package tcp
 
 import (
-	"github.com/apernet/OpenGFW/analyzer"
-	"github.com/apernet/OpenGFW/analyzer/internal"
-	"github.com/apernet/OpenGFW/analyzer/utils"
+	"github.com/uQUIC/XGFW/analyzer"
+	"github.com/uQUIC/XGFW/analyzer/internal"
+	"github.com/uQUIC/XGFW/analyzer/utils"
 )
 
 var _ analyzer.TCPAnalyzer = (*TLSAnalyzer)(nil)
