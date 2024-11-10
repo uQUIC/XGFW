@@ -4,8 +4,8 @@ import (
 	"context"
 	"runtime"
 
-	"github.com/apernet/OpenGFW/io"
-	"github.com/apernet/OpenGFW/ruleset"
+	"github.com/uQUIC/XGFW/io"
+	"github.com/uQUIC/XGFW/ruleset"
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
