@@ -5,9 +5,9 @@ import (
 	"net"
 	"strconv"
 
-	"github.com/apernet/OpenGFW/analyzer"
-	"github.com/apernet/OpenGFW/modifier"
-	"github.com/apernet/OpenGFW/ruleset/builtins/geo"
+	"github.com/uQUIC/XGFW/analyzer"
+	"github.com/uQUIC/XGFW/modifier"
+	"github.com/uQUIC/XGFW/ruleset/builtins/geo"
 )
 
 type Action int
