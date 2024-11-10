@@ -17,10 +17,10 @@ import (
 	"github.com/expr-lang/expr/vm"
 	"gopkg.in/yaml.v3"
 
-	"github.com/apernet/OpenGFW/analyzer"
-	"github.com/apernet/OpenGFW/analyzer/tcp"
-	"github.com/apernet/OpenGFW/modifier"
-	"github.com/apernet/OpenGFW/ruleset/builtins"
+	"github.com/uQUIC/XGFW/analyzer"
+	"github.com/uQUIC/XGFW/analyzer/tcp"
+	"github.com/uQUIC/XGFW/modifier"
+	"github.com/uQUIC/XGFW/ruleset/builtins"
 )
 
 // ExprRule is the external representation of an expression rule.
