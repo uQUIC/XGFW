@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/apernet/OpenGFW/analyzer"
+	"github.com/uQUIC/XGFW/analyzer"
 )
 
 func TestTlsStreamParsing_ClientHello(t *testing.T) {
