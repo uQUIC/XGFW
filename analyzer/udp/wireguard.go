@@ -6,7 +6,7 @@ import (
 	"slices"
 	"sync"
 
-	"github.com/apernet/OpenGFW/analyzer"
+	"github.com/uQUIC/XGFW/analyzer"
 )
 
 var (
