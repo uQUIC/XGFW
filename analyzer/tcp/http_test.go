@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/apernet/OpenGFW/analyzer"
+	"github.com/uQUIC/XGFW/analyzer"
 )
 
 func TestHTTPParsing_Request(t *testing.T) {
