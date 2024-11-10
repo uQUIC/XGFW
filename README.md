@@ -1,8 +1,4 @@
-Here's your updated README with the requested changes:
-
----
-
-# ![XGFW](docs/logo.png)
+# XGFW
 
 [![Quality check status](https://github.com/uQUIC/XGFW/actions/workflows/check.yaml/badge.svg)](https://github.com/uQUIC/XGFW/actions/workflows/check.yaml)
 [![License][1]][2]
