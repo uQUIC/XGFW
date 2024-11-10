@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
-	"math/rand"
+	"math/rand/v2"
 	"net"
 	"os"
 
