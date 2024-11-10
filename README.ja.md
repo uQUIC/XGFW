@@ -1,12 +1,14 @@
-# ![OpenGFW](docs/logo.png)
+Here's the updated README in Japanese with the requested changes:
 
-[![Quality check status](https://github.com/apernet/OpenGFW/actions/workflows/check.yaml/badge.svg)](https://github.com/apernet/OpenGFW/actions/workflows/check.yaml)
-[![License][1]][2]
+---
+
+# XGFW
+
+[![Quality check status](https://github.com/uQUIC/XGFW/actions/workflows/check.yaml/badge.svg)](https://github.com/uQUIC/XGFW/actions/workflows/check.yaml)
 
 [1]: https://img.shields.io/badge/License-MPL_2.0-brightgreen.svg
-[2]: LICENSE
 
-OpenGFW は、あなた専用の DIY 中国のグレートファイアウォール (https://en.wikipedia.org/wiki/Great_Firewall) です。Linux 上で利用可能な柔軟で使いやすいオープンソースプログラムとして提供されています。なぜ権力者だけが楽しむのでしょうか？権力を人々に与え、検閲を民主化する時が来ました。自宅のルーターにサイバー主権のスリルをもたらし、プロのようにフィルタリングを始めましょう - あなたもビッグブラザーになることができます。
+XGFW は、あなた専用の DIY 中国のグレートファイアウォール (https://en.wikipedia.org/wiki/Great_Firewall) です。Linux 上で利用可能な柔軟で使いやすいオープンソースプログラムとして提供されています。なぜ権力者だけが楽しむのでしょうか？権力を人々に与え、検閲を民主化する時が来ました。自宅のルーターにサイバー主権のスリルをもたらし、プロのようにフィルタリングを始めましょう - あなたもビッグブラザーになることができます。
 
 **ドキュメントウェブサイト: https://gfw.dev/**
 
