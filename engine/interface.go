@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/apernet/OpenGFW/io"
-	"github.com/apernet/OpenGFW/ruleset"
+	"github.com/uQUIC/XGFW/io"
+	"github.com/uQUIC/XGFW/ruleset"
 )
 
 // Engine is the main engine for OpenGFW.
