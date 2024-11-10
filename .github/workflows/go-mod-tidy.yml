@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main  # 或其他你希望触发的分支
+  workflow_dispatch:  # 添加手动触发事件
 
 jobs:
   go-mod-tidy:
