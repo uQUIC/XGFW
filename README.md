@@ -1,10 +1,8 @@
 # XGFW
 
 [![Quality check status](https://github.com/uQUIC/XGFW/actions/workflows/check.yaml/badge.svg)](https://github.com/uQUIC/XGFW/actions/workflows/check.yaml)
-[![License][1]][2]
 
 [1]: https://img.shields.io/badge/License-MPL_2.0-brightgreen.svg
-[2]: LICENSE
 
 **[中文文档](README.zh.md)**
 **[日本語ドキュメント](README.ja.md)**
