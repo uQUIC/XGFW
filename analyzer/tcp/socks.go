@@ -3,8 +3,8 @@ package tcp
 import (
 	"net"
 
-	"github.com/apernet/OpenGFW/analyzer"
-	"github.com/apernet/OpenGFW/analyzer/utils"
+	"github.com/uQUIC/XGFW/analyzer"
+	"github.com/uQUIC/XGFW/analyzer/utils"
 )
 
 const (
