@@ -1,4 +1,4 @@
-module github.com/X2ET/XGFW
+module github.com/uQUIC/XGFW
 
 go 1.21
 
