@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/apernet/OpenGFW/io"
-	"github.com/apernet/OpenGFW/ruleset"
+	"github.com/uQUIC/XGFW/io"
+	"github.com/uQUIC/XGFW/ruleset"
 
 	"github.com/bwmarrin/snowflake"
 	"github.com/google/gopacket"
