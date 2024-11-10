@@ -1,7 +1,3 @@
-Here's the updated README in Japanese with the requested changes:
-
----
-
 # XGFW
 
 [![Quality check status](https://github.com/uQUIC/XGFW/actions/workflows/check.yaml/badge.svg)](https://github.com/uQUIC/XGFW/actions/workflows/check.yaml)
