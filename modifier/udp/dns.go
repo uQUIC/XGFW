@@ -10,7 +10,7 @@ import (
 	"net"
 	"os"
 
-	"github.com/apernet/OpenGFW/modifier"
+	"github.com/uQUIC/XGFW/modifier"
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
