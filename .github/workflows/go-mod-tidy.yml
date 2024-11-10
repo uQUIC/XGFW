@@ -31,6 +31,7 @@ jobs:
           else
             echo "has_changes=false" >> $GITHUB_ENV
           fi
+          git status  # 输出状态，便于调试
 
       - name: Create new branch
         if: env.has_changes == 'true'
@@ -57,3 +58,4 @@ jobs:
           title: "chore: run go mod tidy"
           body: "This PR was created automatically by a GitHub Action to tidy up the Go modules."
           base: main  # 修改为你的目标分支
+          draft: false
