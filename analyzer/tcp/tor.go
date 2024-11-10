@@ -1,8 +1,8 @@
 package tcp
 
 import (
-	"github.com/apernet/OpenGFW/analyzer"
-	"github.com/apernet/OpenGFW/ruleset/builtins/tor"
+	"github.com/uQUIC/XGFW/analyzer"
+	"github.com/uQUIC/XGFW/ruleset/builtins/tor"
 )
 
 var _ analyzer.TCPAnalyzer = (*TorAnalyzer)(nil)
