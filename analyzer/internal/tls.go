@@ -1,8 +1,8 @@
 package internal
 
 import (
-	"github.com/X2ET/XGFW/analyzer"
-	"github.com/X2ET/XGFW/analyzer/utils"
+	"github.com/uQUIC/XGFW/analyzer"
+	"github.com/uQUIC/XGFW/analyzer/utils"
 )
 
 // TLS record types.
