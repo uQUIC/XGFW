@@ -3,7 +3,7 @@ package tcp
 import (
 	"bytes"
 
-	"github.com/apernet/OpenGFW/analyzer"
+	"github.com/uQUIC/XGFW/analyzer"
 )
 
 var _ analyzer.TCPAnalyzer = (*TrojanAnalyzer)(nil)
