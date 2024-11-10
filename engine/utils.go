@@ -1,6 +1,6 @@
 package engine
 
-import "github.com/apernet/OpenGFW/analyzer"
+import "github.com/uQUIC/XGFW/analyzer"
 
 var _ analyzer.Logger = (*analyzerLogger)(nil)
 
