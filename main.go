@@ -1,6 +1,6 @@
 package main
 
-import "github.com/apernet/OpenGFW/cmd"
+import "github.com/uQUIC/XGFW/cmd"
 
 func main() {
 	cmd.Execute()
