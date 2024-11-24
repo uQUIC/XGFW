@@ -10,43 +10,43 @@ import (
 )
 
 const (
-	quicInvalidCountThreshold = 4
-	maxPacketLossRate = 0.02  // 最大丢包率 2%
+	brutalInvalidCountThreshold = 4
+	brutalMaxPacketLossRate     = 0.02 // 最大丢包率 2%
 )
 
 var (
-	_ analyzer.UDPAnalyzer = (*QUICAnalyzer)(nil)
-	_ analyzer.UDPStream   = (*quicStream)(nil)
+	_ analyzer.UDPAnalyzer = (*BrutalAnalyzer)(nil)
+	_ analyzer.UDPStream   = (*brutalStream)(nil)
 )
 
-type QUICAnalyzer struct{}
+type BrutalAnalyzer struct{}
 
-func (a *QUICAnalyzer) Name() string {
-	return "quic"
+func (a *BrutalAnalyzer) Name() string {
+	return "brutal"
 }
 
-func (a *QUICAnalyzer) Limit() int {
+func (a *BrutalAnalyzer) Limit() int {
 	return 0
 }
 
-func (a *QUICAnalyzer) NewUDP(info analyzer.UDPInfo, logger analyzer.Logger) analyzer.UDPStream {
-	return &quicStream{logger: logger}
+func (a *BrutalAnalyzer) NewUDP(info analyzer.UDPInfo, logger analyzer.Logger) analyzer.UDPStream {
+	return &brutalStream{logger: logger}
 }
 
-type quicStream struct {
-	logger       analyzer.Logger
-	invalidCount int
-	packetCount  int
-	lossCount    int
-	lastTime     time.Time
-	lastPacketSize int
-	isBrutal     bool  // 用于标记是否为brutal流量
+type brutalStream struct {
+	logger          analyzer.Logger
+	invalidCount    int
+	packetCount     int
+	lossCount       int
+	lastTime        time.Time
+	lastPacketSize  int
+	isBrutal        bool // 用于标记是否为 brutal 流量
 }
 
 // 模拟丢包和速率分析
-func (s *quicStream) Feed(rev bool, data []byte) (u *analyzer.PropUpdate, done bool) {
+func (s *brutalStream) Feed(rev bool, data []byte) (u *analyzer.PropUpdate, done bool) {
 	// 丢包模拟：根据最大丢包率控制丢包概率
-	if rand.Float64() < maxPacketLossRate {
+	if rand.Float64() < brutalMaxPacketLossRate {
 		s.lossCount++
 		return nil, false // 丢弃当前数据包
 	}
@@ -59,7 +59,7 @@ func (s *quicStream) Feed(rev bool, data []byte) (u *analyzer.PropUpdate, done b
 		packetRate := float64(s.packetCount) / elapsed
 		lossRate := float64(s.lossCount) / float64(s.packetCount)
 
-		// 判断流量是否符合brutal特征：速率与丢包率的反比关系
+		// 判断流量是否符合 brutal 特征：速率与丢包率的反比关系
 		if lossRate > 0.1 && packetRate > 0.5 {
 			s.isBrutal = true
 		}
@@ -73,31 +73,31 @@ func (s *quicStream) Feed(rev bool, data []byte) (u *analyzer.PropUpdate, done b
 	if rev {
 		// 不支持服务器方向的流量
 		s.invalidCount++
-		return nil, s.invalidCount >= quicInvalidCountThreshold
+		return nil, s.invalidCount >= brutalInvalidCountThreshold
 	}
 
 	pl, err := quic.ReadCryptoPayload(data)
 	if err != nil || len(pl) < 4 {
 		s.invalidCount++
-		return nil, s.invalidCount >= quicInvalidCountThreshold
+		return nil, s.invalidCount >= brutalInvalidCountThreshold
 	}
 
 	if pl[0] != internal.TypeClientHello {
 		s.invalidCount++
-		return nil, s.invalidCount >= quicInvalidCountThreshold
+		return nil, s.invalidCount >= brutalInvalidCountThreshold
 	}
 
 	chLen := int(pl[1])<<16 | int(pl[2])<<8 | int(pl[3])
 	if chLen < minDataSize {
 		s.invalidCount++
-		return nil, s.invalidCount >= quicInvalidCountThreshold
+		return nil, s.invalidCount >= brutalInvalidCountThreshold
 	}
 
 	// 解析客户端握手消息
 	m := internal.ParseTLSClientHelloMsgData(&utils.ByteBuffer{Buf: pl[4:]})
 	if m == nil {
 		s.invalidCount++
-		return nil, s.invalidCount >= quicInvalidCountThreshold
+		return nil, s.invalidCount >= brutalInvalidCountThreshold
 	}
 
 	// 返回数据流的更新，包括当前请求信息
@@ -107,16 +107,16 @@ func (s *quicStream) Feed(rev bool, data []byte) (u *analyzer.PropUpdate, done b
 	}, true
 }
 
-func (s *quicStream) Close(limited bool) *analyzer.PropUpdate {
-	// 输出流量是否为brutal的判定结果
+func (s *brutalStream) Close(limited bool) *analyzer.PropUpdate {
+	// 输出流量是否为 brutal 的判定结果
 	if s.isBrutal {
 		return &analyzer.PropUpdate{
 			Type: analyzer.PropUpdateReplace,
 			M: analyzer.PropMap{
-				"isBrutal": true,
+				"isBrutal":   true,
 				"packetCount": s.packetCount,
-				"lossCount": s.lossCount,
-				"lossRate": float64(s.lossCount) / float64(s.packetCount),
+				"lossCount":  s.lossCount,
+				"lossRate":   float64(s.lossCount) / float64(s.packetCount),
 			},
 		}
 	}
