@@ -27,9 +27,9 @@ import (
 
 const (
 	appLogo = `
-░█▀█░█▀█░█▀▀░█▀█░█▀▀░█▀▀░█░█
-░█░█░█▀▀░█▀▀░█░█░█░█░█▀▀░█▄█
-░▀▀▀░▀░░░▀▀▀░▀░▀░▀▀▀░▀░░░▀░▀
+█ █ █▀▀░█▀▀░█░█
+ █  █░█░█▀▀░█▄█
+█ █ ▀▀▀░▀░░░▀░▀
 `
 	appDesc    = "Open source network filtering and analysis software"
 	appAuthors = "Aperture Internet Laboratory <https://github.com/apernet>"
