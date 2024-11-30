@@ -11,7 +11,7 @@ XGFW is your very own DIY Great Firewall of China (https://en.wikipedia.org/wiki
 
 **Documentation site: https://gfw.dev/**
 
-Telegram group: https://t.me/OpGFW
+Telegram group: https://t.me/NextGFW
 
 > [!CAUTION]
 > This project is still in very early stages of development. Use at your own risk. We are looking for contributors to help us improve and expand the project.
