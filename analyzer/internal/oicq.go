@@ -3,7 +3,7 @@ package oicq
 import (
     "bytes"
     "encoding/binary"
-    "github.com/apernet/OpenGFW/analyzer"
+    "github.com/uQUIC/XGFW/analyzer"
 )
 
 const (
