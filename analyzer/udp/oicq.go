@@ -2,7 +2,7 @@ package udp
 
 import (
     "encoding/binary"
-    "github.com/apernet/OpenGFW/analyzer"
+    "github.com/uQUIC/XGFW/analyzer"
     "bytes"
 )
 
