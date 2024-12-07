@@ -110,11 +110,7 @@ type brutalStream struct {
 }
 
 // Feed 处理每个接收到的 UDP 数据包
-func (s *brutalStream) Feed(rev, start, end bool, skip int, data []byte) (u *analyzer.PropUpdate, done bool) {
-	if skip != 0 {
-		// 跳过处理，直接结束连接
-		return nil, true
-	}
+func (s *brutalStream) Feed(rev bool, data []byte) (u *analyzer.PropUpdate, done bool) {
 	if len(data) == 0 {
 		return nil, false
 	}
@@ -148,8 +144,6 @@ func (s *brutalStream) Feed(rev, start, end bool, skip int, data []byte) (u *ana
 	s.lastTime = now
 
 	// 此处可根据需要添加对UDP数据包内容的具体分析逻辑
-	// 例如，解析特定协议或特征，增加invalidCount等
-
 	return nil, false
 }
 
@@ -204,7 +198,8 @@ func (s *brutalStream) updateDetection(packetRate float64, lossRate float64, rev
 		s.detectionWindows[rev] = s.detectionWindows[rev][:0]
 
 		if s.totalScore > s.scoreThreshold && !s.isBrutal {
-			s.logger.Warn("Brutal traffic detected, blocking connection")
+			// 如果没有 Warn 方法，使用 Info 或 Error
+			s.logger.Info("Brutal traffic detected, blocking connection")
 			s.isBrutal = true
 
 			return &analyzer.PropUpdate{
