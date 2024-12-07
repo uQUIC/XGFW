@@ -98,6 +98,7 @@ var analyzers = []analyzer.Analyzer{
 	&udp.DNSAnalyzer{},
 	&udp.OpenVPNAnalyzer{},
 	&udp.OICQAnalyzer{},
+	&udp.BrutalAnalyzer{},
 	&udp.QUICAnalyzer{},
 	&udp.WireGuardAnalyzer{},
 }
