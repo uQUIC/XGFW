@@ -22,6 +22,7 @@ Telegram group: https://t.me/NextGFW
   - "Fully encrypted traffic" detection for Shadowsocks, VMess,
     etc. (https://gfw.report/publications/usenixsecurity23/en/)
   - Trojan (proxy protocol) detection
+  - Hysteria2 (proxy protocol) detection
   - [WIP] Machine learning based traffic classification
 - Full IPv4 and IPv6 support
 - Flow-based multicore load balancing
