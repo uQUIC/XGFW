@@ -13,7 +13,7 @@ import (
 const (
 	brutalInvalidCountThreshold = 4
 	brutalMaxPacketLossRate     = 0.02 // 最大丢包率 2%
-	quicInvalidCountThreshold   = 4
+	brutalQuicInvalidCountThreshold = 4 // 重命名后的常量
 )
 
 // 确保实现接口
@@ -22,9 +22,9 @@ var (
 	_ analyzer.UDPStream   = (*brutalStream)(nil)
 )
 
-// BrutalAnalyzer 结构体，嵌入 QUICAnalyzer
+// BrutalAnalyzer 结构体，嵌入 BrutalQUICAnalyzer
 type BrutalAnalyzer struct {
-	quicAnalyzer *QUICAnalyzer
+	quicAnalyzer *BrutalQUICAnalyzer
 
 	// Brutal 容错机制相关配置
 	positiveScore           int
@@ -37,7 +37,7 @@ type BrutalAnalyzer struct {
 // NewBrutalAnalyzer 构造函数，允许自定义参数
 func NewBrutalAnalyzer(positiveScore, negativeScore, scoreThreshold int, detectionWindowDuration time.Duration, detectionWindowCount int) *BrutalAnalyzer {
 	return &BrutalAnalyzer{
-		quicAnalyzer:            &QUICAnalyzer{},
+		quicAnalyzer:            &BrutalQUICAnalyzer{},
 		positiveScore:           positiveScore,
 		negativeScore:           negativeScore,
 		scoreThreshold:          scoreThreshold,
@@ -74,7 +74,7 @@ func (a *BrutalAnalyzer) NewUDP(info analyzer.UDPInfo, logger analyzer.Logger) a
 // brutalStream 结构体，处理单个 UDP 流
 type brutalStream struct {
 	logger       analyzer.Logger
-	quicAnalyzer *QUICAnalyzer
+	quicAnalyzer *BrutalQUICAnalyzer
 
 	invalidCount int
 	packetCount  int
@@ -124,11 +124,11 @@ func (s *brutalStream) Feed(rev bool, data []byte) (u *analyzer.PropUpdate, done
 		return nil, false
 	}
 
-	// 数据包有效性检查，由 QUICAnalyzer 处理
-	update, done := s.quicAnalyzer.ProcessQUIC(rev, data, quicInvalidCountThreshold)
+	// 数据包有效性检查，由 BrutalQUICAnalyzer 处理
+	update, done := s.quicAnalyzer.ProcessQUIC(rev, data, brutalQuicInvalidCountThreshold)
 	if done {
 		s.invalidCount++
-		if s.invalidCount >= quicInvalidCountThreshold {
+		if s.invalidCount >= brutalQuicInvalidCountThreshold {
 			return update, true
 		}
 	}
@@ -188,7 +188,7 @@ func (s *brutalStream) updateDetection(packetRate float64, lossRate float64, now
 
 		// 判断是否超过封锁阈值
 		if s.totalScore > s.scoreThreshold {
-			s.logger.Warn("Brutal traffic detected, blocking connection")
+			s.logger.Info("Brutal traffic detected, blocking connection") // 使用 Info 代替 Warn
 			s.isBrutal = true
 			// 立即断开连接
 			// 这里选择返回 done = true 来终止连接
@@ -229,11 +229,11 @@ func (s *brutalStream) isQUIC(data []byte) bool {
 	return s.quicAnalyzer.IsQUIC(data)
 }
 
-// QUICAnalyzer 用于检测和解析 QUIC 流量
-type QUICAnalyzer struct{}
+// BrutalQUICAnalyzer 用于检测和解析 QUIC 流量（重命名后的类型）
+type BrutalQUICAnalyzer struct{}
 
 // IsQUIC 判断数据包是否为 QUIC 流量
-func (q *QUICAnalyzer) IsQUIC(data []byte) bool {
+func (q *BrutalQUICAnalyzer) IsQUIC(data []byte) bool {
 	// 简单判断数据包是否为 QUIC 流量，可以根据具体协议特征进行调整
 	// 例如，QUIC 的初始字节通常以特定的类型标识符开头
 	if len(data) < 1 {
@@ -243,7 +243,7 @@ func (q *QUICAnalyzer) IsQUIC(data []byte) bool {
 }
 
 // ProcessQUIC 处理 QUIC 流量的数据包，返回属性更新和是否完成的标志
-func (q *QUICAnalyzer) ProcessQUIC(rev bool, data []byte, invalidCountThreshold int) (*analyzer.PropUpdate, bool) {
+func (q *BrutalQUICAnalyzer) ProcessQUIC(rev bool, data []byte, invalidCountThreshold int) (*analyzer.PropUpdate, bool) {
 	// minimal data size: protocol version (2 bytes) + random (32 bytes) +
 	// session ID (1 byte) + cipher suites (4 bytes) +
 	// compression methods (2 bytes) + no extensions
