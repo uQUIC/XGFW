@@ -1,10 +1,9 @@
-// tcp/trojan_analyzer.go
 package tcp
 
 import (
 	"bytes"
 
-	"github.com/uQUIC/XGFW/analyzer"
+	"github.com/apernet/OpenGFW/analyzer"
 )
 
 var _ analyzer.TCPAnalyzer = (*TrojanAnalyzer)(nil)
@@ -12,15 +11,13 @@ var _ analyzer.TCPAnalyzer = (*TrojanAnalyzer)(nil)
 // CCS stands for "Change Cipher Spec"
 var ccsPattern = []byte{20, 3, 3, 0, 1, 1}
 
-// Configurable parameters for detection
-const (
-	positiveIncrement = 2 // Increment for positive detections
-	negativeDecrement = 1 // Decrement for negative detections
-	threshold         = 20 // Threshold for blocking
-)
-
-// TrojanAnalyzer uses length-based heuristics to detect Trojan traffic.
-// The detection uses a decision tree and configurable parameters for detection.
+// TrojanAnalyzer uses length-based heuristics to detect Trojan traffic based on
+// its "TLS-in-TLS" nature. The heuristics are trained using a decision tree with
+// about 20k Trojan samples and 30k non-Trojan samples. The tree is then converted
+// to code using a custom tool and inlined here (isTrojanSeq function).
+// Accuracy: 1% false positive rate, 10% false negative rate.
+// We do NOT recommend directly blocking all positive connections, as this may
+// break legitimate TLS connections.
 type TrojanAnalyzer struct{}
 
 func (a *TrojanAnalyzer) Name() string {
@@ -36,23 +33,16 @@ func (a *TrojanAnalyzer) NewTCP(info analyzer.TCPInfo, logger analyzer.Logger) a
 }
 
 type trojanStream struct {
-	logger        analyzer.Logger
-	first         bool
-	count         bool
-	rev           bool
-	seq           [4]int
-	seqIndex      int
-	score         int // Tracks the current score for blocking logic
-	positiveCount int // Counts positive results from detection tree
+	logger   analyzer.Logger
+	first    bool
+	count    bool
+	rev      bool
+	seq      [4]int
+	seqIndex int
 }
 
 func newTrojanStream(logger analyzer.Logger) *trojanStream {
-	return &trojanStream{
-		logger:        logger,
-		first:         true,
-		score:         0,
-		positiveCount: 0,
-	}
+	return &trojanStream{logger: logger}
 }
 
 func (s *trojanStream) Feed(rev, start, end bool, skip int, data []byte) (u *analyzer.PropUpdate, done bool) {
@@ -85,45 +75,13 @@ func (s *trojanStream) Feed(rev, start, end bool, skip int, data []byte) (u *ana
 			// Different direction, bump the index
 			s.seqIndex += 1
 			if s.seqIndex == 4 {
-				// Perform detection using isTrojanSeq
-				detected := isTrojanSeq(s.seq)
-
-				// Adjust score based on detection result
-				if detected {
-					s.score += positiveIncrement
-					s.positiveCount++ // Increment positive result counter
-				} else {
-					s.score -= negativeDecrement
-					if s.score < 0 {
-						s.score = 0
-					}
-				}
-
-				// Return blocking result if score exceeds threshold
-				if s.score > threshold {
-					return &analyzer.PropUpdate{
-						Type: analyzer.PropUpdateReplace,
-						M: analyzer.PropMap{
-							"seq":            s.seq,
-							"yes":            detected,
-							"score":          s.score,
-							"positiveCount":  s.positiveCount,
-							"action":         "block",
-						},
-					}, true
-				}
-
-				// Otherwise return updated state
 				return &analyzer.PropUpdate{
 					Type: analyzer.PropUpdateReplace,
 					M: analyzer.PropMap{
-						"seq":            s.seq,
-						"yes":            detected,
-						"score":          s.score,
-						"positiveCount":  s.positiveCount,
-						"action":         "allow",
+						"seq": s.seq,
+						"yes": isTrojanSeq(s.seq),
 					},
-				}, false
+				}, true
 			}
 			s.seq[s.seqIndex] += len(data)
 			s.rev = rev
@@ -137,14 +95,12 @@ func (s *trojanStream) Close(limited bool) *analyzer.PropUpdate {
 	return nil
 }
 
-// isTrojanSeq determines whether the sequence is detected as Trojan using the decision tree
 func isTrojanSeq(seq [4]int) bool {
 	length1 := seq[0]
 	length2 := seq[1]
 	length3 := seq[2]
 	length4 := seq[3]
 
-	// Decision tree logic
 	if length2 <= 2431 {
 		if length2 <= 157 {
 			if length1 <= 156 {
