@@ -16,31 +16,20 @@ import (
 	"github.com/uQUIC/XGFW/analyzer/utils"
 )
 
-// 假设的阈值和参数
+// 常量定义
 const (
 	invalidCountThreshold = 4
 	minDataSize           = 41
 
-	testPortCount     = 10
-	serverPortMin     = 20000
-	serverPortMax     = 50000
-	highBandwidthBps  = 100_000_000 // 100 Mbps
+	testPortCount      = 10
+	serverPortMin      = 20000
+	serverPortMax      = 50000
+	highBandwidthBps   = 100_000_000 // 100 Mbps
 	twentyMinutes      = 20 * time.Minute
 	dnsServer          = "1.1.1.1:53"
 	dnsTimeout         = 5 * time.Second
 	portRequestTimeout = 1 * time.Second
 )
-
-// 假设 internal.ParseTLSClientHelloMsgData 返回的结构，其中含有 ServerName 字段
-// 实际需根据 internal 包的定义进行相应调整
-// 此处仅作示意：
-/*
-package internal
-type ClientHelloMsg struct {
-	ServerName string
-	// ...其他字段
-}
-*/
 
 // 确保接口实现
 var (
@@ -48,29 +37,35 @@ var (
 	_ analyzer.UDPStream   = (*hysteria2Stream)(nil)
 )
 
+// Hysteria2Analyzer 实现 analyzer.UDPAnalyzer 接口
 type Hysteria2Analyzer struct{}
 
+// Name 返回分析器名称
 func (a *Hysteria2Analyzer) Name() string {
 	return "hysteria2-detector"
 }
 
+// Limit 返回连接限制，0表示无限制
 func (a *Hysteria2Analyzer) Limit() int {
 	return 0
 }
 
+// NewUDP 创建新的 UDP 流
 func (a *Hysteria2Analyzer) NewUDP(info analyzer.UDPInfo, logger analyzer.Logger) analyzer.UDPStream {
-	// 从 info 中获取服务器 IP 和 端口（假设 info 有 DstIP, DstPort）
+	// 从 info 中获取服务器 IP 和端口（假设 info 有 DstIP, DstPort）
 	serverIP := info.DstIP.String()
-	serverPort := info.DstPort
+	serverPort := int(info.DstPort) // 将 uint16 转换为 int
 
 	return &hysteria2Stream{
-		logger:     logger,
-		startTime:  time.Now(),
-		serverIP:   serverIP,
-		serverPort: serverPort,
+		logger:        logger,
+		startTime:     time.Now(),
+		serverIP:      serverIP,
+		serverPort:    serverPort,
+		closeComplete: make(chan struct{}),
 	}
 }
 
+// hysteria2Stream 实现 analyzer.UDPStream 接口
 type hysteria2Stream struct {
 	logger       analyzer.Logger
 	packetCount  int
@@ -84,11 +79,13 @@ type hysteria2Stream struct {
 	serverIP   string
 	serverPort int
 
-	mutex sync.Mutex
+	mutex          sync.Mutex
+	closeOnce      sync.Once
+	closeComplete  chan struct{}
 }
 
 // Feed 处理每个UDP包
-func (s *hysteria2Stream) Feed(rev bool, data []byte) (u *analyzer.PropUpdate, done bool) {
+func (s *hysteria2Stream) Feed(rev bool, data []byte) (*analyzer.PropUpdate, bool) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
@@ -121,6 +118,7 @@ func (s *hysteria2Stream) Feed(rev bool, data []byte) (u *analyzer.PropUpdate, d
 		return nil, false
 	}
 
+	// 提取 SNI
 	serverName := m.ServerName
 	if !s.sniExtracted {
 		s.initialSNI = serverName
@@ -140,35 +138,43 @@ func (s *hysteria2Stream) Feed(rev bool, data []byte) (u *analyzer.PropUpdate, d
 
 // Close 在连接结束时进行判断和可能的封锁
 func (s *hysteria2Stream) Close(limited bool) *analyzer.PropUpdate {
+	s.closeOnce.Do(func() {
+		close(s.closeComplete)
+	})
+
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
+
+	var u *analyzer.PropUpdate
 
 	elapsed := time.Since(s.startTime)
 	// 判断条件：连接 >20分钟, 带宽 >100Mbps, SNI未变化
 	if elapsed >= twentyMinutes && s.totalBytes > 0 && !s.sniChanged && s.sni != "" && s.serverIP != "" {
-		// 计算带宽 bps
+		// 计算带宽（bps）
 		bandwidthBps := float64(s.totalBytes*8) / elapsed.Seconds()
-		if bandwidthBps > highBandwidthBps {
+		if bandwidthBps > float64(highBandwidthBps) {
 			// 检查服务器响应内容
 			returnSingle, err := checkServerResponses(s.serverIP)
 			if err == nil && returnSingle {
-				// DNS查询 SNI
+				// 执行DNS查询
 				dnsIPs, err := resolveDNS(s.sni)
 				if err == nil {
-					// 若DNS结果不包含 serverIP，则判断为Hysteria2
+					// 检查DNS结果是否包含服务器IP
 					if !contains(dnsIPs, s.serverIP) {
+						// 判定为Hysteria2，封锁
 						s.logger.Infof("Hysteria2 detected for SNI: %s, IP: %s", s.sni, s.serverIP)
-						return &analyzer.PropUpdate{
+						u = &analyzer.PropUpdate{
 							Type: analyzer.PropUpdateReplace,
 							M: analyzer.PropMap{
-								"blocked":        true,
-								"reason":         "hysteria-detected",
-								"packetCount":    s.packetCount,
-								"totalBytes":     s.totalBytes,
-								"elapsedSeconds": elapsed.Seconds(),
-								"sni":            s.sni,
+								"blocked":         true,
+								"reason":          "hysteria-detected",
+								"packetCount":     s.packetCount,
+								"totalBytes":      s.totalBytes,
+								"elapsedSeconds":  elapsed.Seconds(),
+								"sni":             s.sni,
 							},
 						}
+						return u
 					}
 				}
 			}
@@ -176,7 +182,7 @@ func (s *hysteria2Stream) Close(limited bool) *analyzer.PropUpdate {
 	}
 
 	// 未触发封锁条件
-	return &analyzer.PropUpdate{
+	u = &analyzer.PropUpdate{
 		Type: analyzer.PropUpdateReplace,
 		M: analyzer.PropMap{
 			"packetCount":    s.packetCount,
@@ -186,6 +192,8 @@ func (s *hysteria2Stream) Close(limited bool) *analyzer.PropUpdate {
 			"blocked":        false,
 		},
 	}
+
+	return u
 }
 
 // checkServerResponses 检查服务器 20000-50000 端口中任意10个端口的响应内容是否返回单一
@@ -197,7 +205,6 @@ func checkServerResponses(ip string) (bool, error) {
 
 	var wg sync.WaitGroup
 	responseChan := make(chan string, testPortCount)
-	errChan := make(chan error, testPortCount)
 
 	for _, port := range ports {
 		wg.Add(1)
@@ -205,7 +212,7 @@ func checkServerResponses(ip string) (bool, error) {
 			defer wg.Done()
 			resp, err := sendUDPRequest(ip, p, []byte("test"))
 			if err != nil {
-				errChan <- err
+				// 忽略错误，因为某些端口可能不响应
 				return
 			}
 			responseChan <- resp
@@ -214,7 +221,6 @@ func checkServerResponses(ip string) (bool, error) {
 
 	wg.Wait()
 	close(responseChan)
-	close(errChan)
 
 	// 收集响应
 	responses := make([]string, 0, testPortCount)
@@ -222,12 +228,13 @@ func checkServerResponses(ip string) (bool, error) {
 		responses = append(responses, resp)
 	}
 
-	// 统计出现次数
+	// 统计响应出现次数
 	counts := make(map[string]int)
 	for _, r := range responses {
 		counts[r]++
 	}
 
+	// 检查是否有 >=7 个相同响应
 	for _, count := range counts {
 		if count >= 7 {
 			return true, nil
@@ -268,7 +275,8 @@ func sendUDPRequest(ip string, port int, message []byte) (string, error) {
 	defer conn.Close()
 
 	conn.SetWriteDeadline(time.Now().Add(portRequestTimeout))
-	if _, err = conn.Write(message); err != nil {
+	_, err = conn.Write(message)
+	if err != nil {
 		return "", err
 	}
 
@@ -287,7 +295,9 @@ func resolveDNS(sni string) ([]string, error) {
 	r := &net.Resolver{
 		PreferGo: true,
 		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
-			d := net.Dialer{Timeout: dnsTimeout}
+			d := net.Dialer{
+				Timeout: dnsTimeout,
+			}
 			return d.DialContext(ctx, "udp", dnsServer)
 		},
 	}
@@ -299,6 +309,7 @@ func resolveDNS(sni string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	return ips, nil
 }
 
