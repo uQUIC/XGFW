@@ -1,19 +1,25 @@
+// udp/brutal_analyzer.go
 package udp
 
 import (
 	"math/rand"
+	"sync"
 	"time"
 
 	"github.com/uQUIC/XGFW/analyzer"
-	"github.com/uQUIC/XGFW/analyzer/internal"
-	"github.com/uQUIC/XGFW/analyzer/udp/internal/quic"
-	"github.com/uQUIC/XGFW/analyzer/utils"
 )
 
+// 常量定义
 const (
 	brutalInvalidCountThreshold = 4
 	brutalMaxPacketLossRate     = 0.02 // 最大丢包率 2%
-	brutalQuicInvalidCountThreshold = 4 // 重命名后的常量
+)
+
+// 评分参数和阈值
+const (
+	brutalPositiveIncrement = 2
+	brutalNegativeDecrement = 1
+	brutalScoreThreshold    = 20
 )
 
 // 确保实现接口
@@ -22,259 +28,234 @@ var (
 	_ analyzer.UDPStream   = (*brutalStream)(nil)
 )
 
-// BrutalAnalyzer 结构体，嵌入 BrutalQUICAnalyzer
+// BrutalAnalyzer 是 UDP 流量分析器
 type BrutalAnalyzer struct {
-	quicAnalyzer *BrutalQUICAnalyzer
+	PositiveScore              int
+	NegativeScore              int
+	ScoreThreshold             int
+	DetectionWindowDuration    time.Duration
+	DetectionWindowCount       int
+	DirectionDetectionEnabled  bool
 
-	// Brutal 容错机制相关配置
-	positiveScore           int
-	negativeScore           int
-	scoreThreshold          int
-	detectionWindowDuration time.Duration
-	detectionWindowCount    int
+	mu sync.RWMutex
 }
 
 // NewBrutalAnalyzer 构造函数，允许自定义参数
-func NewBrutalAnalyzer(positiveScore, negativeScore, scoreThreshold int, detectionWindowDuration time.Duration, detectionWindowCount int) *BrutalAnalyzer {
+func NewBrutalAnalyzer(
+	positiveScore, negativeScore, scoreThreshold int,
+	detectionWindowDuration time.Duration,
+	detectionWindowCount int,
+	directionDetectionEnabled bool,
+) *BrutalAnalyzer {
 	return &BrutalAnalyzer{
-		quicAnalyzer:            &BrutalQUICAnalyzer{},
-		positiveScore:           positiveScore,
-		negativeScore:           negativeScore,
-		scoreThreshold:          scoreThreshold,
-		detectionWindowDuration: detectionWindowDuration,
-		detectionWindowCount:    detectionWindowCount,
+		PositiveScore:             positiveScore,
+		NegativeScore:             negativeScore,
+		ScoreThreshold:            scoreThreshold,
+		DetectionWindowDuration:   detectionWindowDuration,
+		DetectionWindowCount:      detectionWindowCount,
+		DirectionDetectionEnabled: directionDetectionEnabled,
 	}
 }
 
-// Name 返回分析器名称
+// Name 返回分析器的名称
 func (a *BrutalAnalyzer) Name() string {
 	return "brutal"
 }
 
-// Limit 返回限制值
+// Limit 返回分析器的限制，这里设置为0表示无限制
 func (a *BrutalAnalyzer) Limit() int {
 	return 0
 }
 
 // NewUDP 创建并返回一个新的 brutalStream 实例
 func (a *BrutalAnalyzer) NewUDP(info analyzer.UDPInfo, logger analyzer.Logger) analyzer.UDPStream {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
 	return &brutalStream{
-		logger:                  logger,
-		quicAnalyzer:            a.quicAnalyzer,
-		positiveScore:           a.positiveScore,
-		negativeScore:           a.negativeScore,
-		scoreThreshold:          a.scoreThreshold,
-		detectionWindowDuration: a.detectionWindowDuration,
-		detectionWindowCount:    a.detectionWindowCount,
-		detectionWindows:        make([]float64, 0, a.detectionWindowCount),
-		windowStartTime:         time.Now(),
+		logger:                    logger,
+		positiveScore:             a.PositiveScore,
+		negativeScore:             a.NegativeScore,
+		scoreThreshold:            a.ScoreThreshold,
+		detectionWindowDuration:   a.DetectionWindowDuration,
+		detectionWindowCount:      a.DetectionWindowCount,
+		directionDetectionEnabled: a.DirectionDetectionEnabled,
+		detectionWindows:          make(map[bool][]float64),
+		windowStartTime:           make(map[bool]time.Time),
 	}
 }
 
-// brutalStream 结构体，处理单个 UDP 流
+// brutalStream 分析单个UDP流
 type brutalStream struct {
 	logger       analyzer.Logger
-	quicAnalyzer *BrutalQUICAnalyzer
-
 	invalidCount int
 	packetCount  int
 	lossCount    int
 	lastTime     time.Time
-	isBrutal     bool // 标记是否为 brutal 流量
+	isBrutal     bool
 
-	// 容错机制相关字段
-	positiveScore          int
-	negativeScore          int
-	totalScore             int
-	scoreThreshold         int
+	positiveScore             int
+	negativeScore             int
+	totalScore                int
+	scoreThreshold            int
+	directionDetectionEnabled bool
+
 	detectionWindowDuration time.Duration
 	detectionWindowCount    int
-	detectionWindows        []float64
-	windowStartTime         time.Time
+	detectionWindows        map[bool][]float64
+	windowStartTime         map[bool]time.Time
+
+	mu            sync.Mutex
+	positiveCount int
 }
 
-// Feed 处理每个接收到的数据包
-func (s *brutalStream) Feed(rev bool, data []byte) (u *analyzer.PropUpdate, done bool) {
-	// 仅对 QUIC 流量进行丢包模拟和检测
-	if s.isQUIC(data) {
-		// 丢包模拟：根据最大丢包率控制丢包概率
-		if rand.Float64() < brutalMaxPacketLossRate {
-			s.lossCount++
-			return nil, false // 丢弃当前数据包
-		}
-		s.packetCount++
-
-		// 计算传输速率和丢包率
-		now := time.Now()
-		elapsed := now.Sub(s.lastTime).Seconds()
-		if elapsed > 0 {
-			packetRate := float64(s.packetCount) / elapsed
-			lossRate := float64(s.lossCount) / float64(s.packetCount)
-
-			// 容错机制检测
-			s.updateDetection(packetRate, lossRate, now)
-		}
-
-		s.lastTime = now
+// Feed 处理每个接收到的 UDP 数据包
+func (s *brutalStream) Feed(rev, start, end bool, skip int, data []byte) (u *analyzer.PropUpdate, done bool) {
+	if skip != 0 {
+		// 跳过处理，直接结束连接
+		return nil, true
 	}
-
-	// 处理非 QUIC 流量的逻辑（忽略）
-	if !s.isQUIC(data) {
-		// 可以选择记录非 QUIC 流量或忽略
+	if len(data) == 0 {
 		return nil, false
 	}
 
-	// 数据包有效性检查，由 BrutalQUICAnalyzer 处理
-	update, done := s.quicAnalyzer.ProcessQUIC(rev, data, brutalQuicInvalidCountThreshold)
-	if done {
-		s.invalidCount++
-		if s.invalidCount >= brutalQuicInvalidCountThreshold {
-			return update, true
+	// 丢包模拟
+	if rand.Float64() < brutalMaxPacketLossRate {
+		s.mu.Lock()
+		s.lossCount++
+		s.mu.Unlock()
+		return nil, false
+	}
+
+	s.mu.Lock()
+	s.packetCount++
+	s.mu.Unlock()
+
+	now := time.Now()
+	elapsed := now.Sub(s.lastTime).Seconds()
+	if elapsed > 0 {
+		s.mu.Lock()
+		packetRate := float64(s.packetCount) / elapsed
+		lossRate := float64(s.lossCount) / float64(s.packetCount)
+		s.mu.Unlock()
+
+		prop, d := s.updateDetection(packetRate, lossRate, rev, now)
+		if prop != nil || d {
+			return prop, d
 		}
 	}
-	return update, done
+
+	s.lastTime = now
+
+	// 此处可根据需要添加对UDP数据包内容的具体分析逻辑
+	// 例如，解析特定协议或特征，增加invalidCount等
+
+	return nil, false
 }
 
-// updateDetection 更新容错机制的检测窗口和得分
-func (s *brutalStream) updateDetection(packetRate float64, lossRate float64, now time.Time) {
-	// 计算字节速率与 (1 - 丢包率) 的乘积
-	metric := packetRate * (1 - lossRate)
+// updateDetection 实现容错机制，通过检测窗口内的指标更新总得分
+func (s *brutalStream) updateDetection(packetRate float64, lossRate float64, rev bool, now time.Time) (*analyzer.PropUpdate, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	// 检查是否超过检测窗口持续时间
-	if now.Sub(s.windowStartTime) >= s.detectionWindowDuration {
-		// 随机选择是否将当前窗口添加到检测窗口中
-		if len(s.detectionWindows) < s.detectionWindowCount && rand.Intn(100) < 10 { // 10% 概率选择
-			s.detectionWindows = append(s.detectionWindows, metric)
-		}
-		s.windowStartTime = now
+	if s.isBrutal {
+		// 已经封锁的流直接返回结束
+		return nil, true
 	}
 
-	// 如果已收集到足够的检测窗口，进行判定
-	if len(s.detectionWindows) >= s.detectionWindowCount {
-		// 计算平均数
+	metric := packetRate * (1 - lossRate)
+
+	if now.Sub(s.windowStartTime[rev]) >= s.detectionWindowDuration {
+		if len(s.detectionWindows[rev]) < s.detectionWindowCount && rand.Intn(100) < 10 {
+			s.detectionWindows[rev] = append(s.detectionWindows[rev], metric)
+		}
+		s.windowStartTime[rev] = now
+	}
+
+	if len(s.detectionWindows[rev]) >= s.detectionWindowCount {
 		var sum float64
-		for _, m := range s.detectionWindows {
+		for _, m := range s.detectionWindows[rev] {
 			sum += m
 		}
-		avg := sum / float64(len(s.detectionWindows))
+		avg := sum / float64(len(s.detectionWindows[rev]))
 
-		// 计算极差
-		var min, max float64
-		min, max = s.detectionWindows[0], s.detectionWindows[0]
-		for _, m := range s.detectionWindows {
-			if m < min {
-				min = m
-			}
-			if m > max {
-				max = m
+		allWithinRange := true
+		for _, m := range s.detectionWindows[rev] {
+			if m < 0.98*avg || m > 1.1*avg {
+				allWithinRange = false
+				break
 			}
 		}
-		rangeValue := max - min
 
-		// 判定条件
-		if rangeValue < 0.5*avg {
-			// 阳性
+		detected := allWithinRange // 如果所有窗口值在范围内则为阳性
+		if detected {
+			// 阳性，加分
 			s.totalScore += s.positiveScore
+			s.positiveCount++
 		} else {
-			// 阴性
-			s.totalScore += s.negativeScore
+			// 阴性，减分
+			s.totalScore -= s.negativeScore
 			if s.totalScore < 0 {
 				s.totalScore = 0
 			}
 		}
 
 		// 清空检测窗口
-		s.detectionWindows = s.detectionWindows[:0]
+		s.detectionWindows[rev] = s.detectionWindows[rev][:0]
 
-		// 判断是否超过封锁阈值
-		if s.totalScore > s.scoreThreshold {
-			s.logger.Info("Brutal traffic detected, blocking connection") // 使用 Info 代替 Warn
+		if s.totalScore > s.scoreThreshold && !s.isBrutal {
+			s.logger.Warn("Brutal traffic detected, blocking connection")
 			s.isBrutal = true
-			// 立即断开连接
-			// 这里选择返回 done = true 来终止连接
+
+			return &analyzer.PropUpdate{
+				Type: analyzer.PropUpdateReplace,
+				M: analyzer.PropMap{
+					"yes":           detected,
+					"score":         s.totalScore,
+					"positiveCount": s.positiveCount,
+					"action":        "block",
+					"isBrutal":      true,
+				},
+			}, true
+		} else {
+			return &analyzer.PropUpdate{
+				Type: analyzer.PropUpdateReplace,
+				M: analyzer.PropMap{
+					"yes":           detected,
+					"score":         s.totalScore,
+					"positiveCount": s.positiveCount,
+					"action":        "allow",
+					"isBrutal":      false,
+				},
+			}, false
 		}
 	}
+
+	return nil, false
 }
 
-// Close 在连接关闭时输出流量判定结果
+// Close 在连接关闭时输出流量是否为 brutal 及相关统计信息
 func (s *brutalStream) Close(limited bool) *analyzer.PropUpdate {
-	// 输出流量是否为 brutal 的判定结果
-	if s.isBrutal {
-		return &analyzer.PropUpdate{
-			Type: analyzer.PropUpdateReplace,
-			M: analyzer.PropMap{
-				"isBrutal":    true,
-				"packetCount": s.packetCount,
-				"lossCount":   s.lossCount,
-				"lossRate":    float64(s.lossCount) / float64(s.packetCount),
-				"totalScore":  s.totalScore,
-			},
-		}
-	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	// 输出流量的基本统计信息
 	return &analyzer.PropUpdate{
 		Type: analyzer.PropUpdateReplace,
 		M: analyzer.PropMap{
-			"packetCount": s.packetCount,
-			"lossCount":   s.lossCount,
-			"lossRate":    float64(s.lossCount) / float64(s.packetCount),
-			"totalScore":  s.totalScore,
+			"packetCount":    s.packetCount,
+			"lossCount":      s.lossCount,
+			"lossRate":       calculateLossRate(s.lossCount, s.packetCount),
+			"totalScore":     s.totalScore,
+			"positiveCount":  s.positiveCount,
+			"isBrutal":       s.isBrutal,
 		},
 	}
 }
 
-// isQUIC 判断数据包是否为 QUIC 流量
-func (s *brutalStream) isQUIC(data []byte) bool {
-	return s.quicAnalyzer.IsQUIC(data)
-}
-
-// BrutalQUICAnalyzer 用于检测和解析 QUIC 流量（重命名后的类型）
-type BrutalQUICAnalyzer struct{}
-
-// IsQUIC 判断数据包是否为 QUIC 流量
-func (q *BrutalQUICAnalyzer) IsQUIC(data []byte) bool {
-	// 简单判断数据包是否为 QUIC 流量，可以根据具体协议特征进行调整
-	// 例如，QUIC 的初始字节通常以特定的类型标识符开头
-	if len(data) < 1 {
-		return false
+// calculateLossRate 计算丢包率，避免除以零
+func calculateLossRate(lossCount, packetCount int) float64 {
+	if packetCount == 0 {
+		return 0.0
 	}
-	return data[0] == internal.TypeClientHello
-}
-
-// ProcessQUIC 处理 QUIC 流量的数据包，返回属性更新和是否完成的标志
-func (q *BrutalQUICAnalyzer) ProcessQUIC(rev bool, data []byte, invalidCountThreshold int) (*analyzer.PropUpdate, bool) {
-	// minimal data size: protocol version (2 bytes) + random (32 bytes) +
-	// session ID (1 byte) + cipher suites (4 bytes) +
-	// compression methods (2 bytes) + no extensions
-	const minDataSize = 41
-
-	if rev {
-		// 不支持服务器方向的流量
-		return nil, false
-	}
-
-	pl, err := quic.ReadCryptoPayload(data)
-	if err != nil || len(pl) < 4 { // FIXME: isn't length checked inside quic.ReadCryptoPayload? Also, what about error handling?
-		return nil, false
-	}
-
-	if pl[0] != internal.TypeClientHello {
-		return nil, false
-	}
-
-	chLen := int(pl[1])<<16 | int(pl[2])<<8 | int(pl[3])
-	if chLen < minDataSize {
-		return nil, false
-	}
-
-	m := internal.ParseTLSClientHelloMsgData(&utils.ByteBuffer{Buf: pl[4:]})
-	if m == nil {
-		return nil, false
-	}
-
-	return &analyzer.PropUpdate{
-		Type: analyzer.PropUpdateMerge,
-		M:    analyzer.PropMap{"req": m},
-	}, true
+	return float64(lossCount) / float64(packetCount)
 }
