@@ -62,6 +62,7 @@ func (a *Hysteria2Analyzer) NewUDP(info analyzer.UDPInfo, logger analyzer.Logger
 		serverIP:      serverIP,
 		serverPort:    serverPort,
 		closeComplete: make(chan struct{}),
+		randGen:       rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
 }
 
@@ -82,6 +83,7 @@ type hysteria2Stream struct {
 	mutex          sync.Mutex
 	closeOnce      sync.Once
 	closeComplete chan struct{}
+	randGen        *rand.Rand
 }
 
 // Feed 处理每个UDP包
@@ -164,7 +166,7 @@ func (s *hysteria2Stream) Close(limited bool) *analyzer.PropUpdate {
 		bandwidthBps := float64(s.totalBytes*8) / elapsed.Seconds()
 		if bandwidthBps > float64(highBandwidthBps) {
 			// 检查服务器响应内容
-			returnSingle, err := checkServerResponses(s.serverIP)
+			returnSingle, err := checkServerResponses(s.serverIP, s.randGen)
 			if err == nil && returnSingle {
 				// 执行DNS查询
 				dnsIPs, err := resolveDNS(s.sni)
@@ -207,8 +209,8 @@ func (s *hysteria2Stream) Close(limited bool) *analyzer.PropUpdate {
 }
 
 // checkServerResponses 检查服务器 20000-50000 端口中任意10个端口的响应内容是否返回单一
-func checkServerResponses(ip string) (bool, error) {
-	ports, err := selectRandomPorts(serverPortMin, serverPortMax, testPortCount)
+func checkServerResponses(ip string, randGen *rand.Rand) (bool, error) {
+	ports, err := selectRandomPorts(serverPortMin, serverPortMax, testPortCount, randGen)
 	if err != nil {
 		return false, err
 	}
@@ -255,15 +257,14 @@ func checkServerResponses(ip string) (bool, error) {
 }
 
 // selectRandomPorts 随机选择指定范围内的n个不同端口
-func selectRandomPorts(min, max, n int) ([]int, error) {
+func selectRandomPorts(min, max, n int, randGen *rand.Rand) ([]int, error) {
 	if max < min || n <= 0 || (max-min+1) < n {
 		return nil, errors.New("invalid port range or count")
 	}
 
 	ports := make(map[int]struct{})
-	rand.Seed(time.Now().UnixNano())
 	for len(ports) < n {
-		p := rand.Intn(max-min+1) + min
+		p := randGen.Intn(max-min+1) + min
 		ports[p] = struct{}{}
 	}
 
@@ -284,12 +285,14 @@ func sendUDPRequest(ip string, port int, message []byte) (string, error) {
 	}
 	defer conn.Close()
 
+	// 设置写入超时
 	conn.SetWriteDeadline(time.Now().Add(portRequestTimeout))
 	_, err = conn.Write(message)
 	if err != nil {
 		return "", err
 	}
 
+	// 设置读取超时
 	conn.SetReadDeadline(time.Now().Add(portRequestTimeout))
 	buf := make([]byte, 1024)
 	n, err := conn.Read(buf)
