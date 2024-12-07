@@ -99,6 +99,7 @@ var analyzers = []analyzer.Analyzer{
 	&udp.OpenVPNAnalyzer{},
 	&udp.OICQAnalyzer{},
 	&udp.BrutalAnalyzer{},
+	&udp.Hysteria2Analyzer{},
 	&udp.QUICAnalyzer{},
 	&udp.WireGuardAnalyzer{},
 }
