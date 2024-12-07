@@ -11,16 +11,16 @@ import (
 
 const (
 	brutalInvalidCountThreshold = 4
-	brutalMaxPacketLossRate     = 0.02 // 最大丢包率 2%
+	// brutalMaxPacketLossRate     = 0.02 // 最大丢包率 2% 已移除
 
-	// 以下为新添加的参数（可自定义）
+	// 新添加的参数（可自定义）
 	positiveScoreIncrement = 2  // 阳性时加分
 	negativeScoreDecrement = 1  // 阴性时减分，不可减至负数
 	blockThreshold         = 20 // 总分大于此值则封锁
 
-	intervalCount = 5            // 总共需要随机选择的区间数
-	intervalDuration = 10 * time.Millisecond
-	intervalStartChance = 0.01   // 每次 Feed 尝试启动区间的概率
+	intervalCount     = 5                      // 总共需要随机选择的区间数
+	intervalDuration  = 10 * time.Millisecond  // 每个区间的持续时间
+	intervalStartChance = 0.01                // 每次 Feed 尝试启动区间的概率
 )
 
 var (
@@ -46,21 +46,17 @@ func (a *BrutalAnalyzer) NewUDP(info analyzer.UDPInfo, logger analyzer.Logger) a
 }
 
 type intervalData struct {
-	byteCount     int
-	packetCount   int
-	lossCount     int
-	startTime     time.Time
-	endTime       time.Time
+	byteCount int
+	startTime time.Time
+	endTime   time.Time
 }
 
 type brutalStream struct {
 	logger          analyzer.Logger
 	invalidCount    int
 	packetCount     int
-	lossCount       int
-	totalBytes      int // 累计收到的总字节数（未丢包的包）
+	totalBytes      int // 累计收到的总字节数
 	lastTime        time.Time
-	lastPacketSize  int
 
 	// 容错机制相关
 	score            int // 当前总得分
@@ -72,21 +68,13 @@ type brutalStream struct {
 	allIntervalsDone bool
 }
 
-// 在 Feed 中模拟丢包和统计数据
+// 在 Feed 中模拟统计数据
 func (s *brutalStream) Feed(rev bool, data []byte) (u *analyzer.PropUpdate, done bool) {
-	// 丢包模拟：根据最大丢包率控制丢包概率
-	drop := rand.Float64() < brutalMaxPacketLossRate
-	if drop {
-		s.lossCount++
-		s.packetCount++
-		// 即使丢包也需要计入当前区间的数据统计(丢包计数、总包计数)
-		s.updateIntervalStats(len(data), true)
-		return nil, false // 丢弃当前数据包
-	}
+	// 丢包模拟已移除
 
 	s.packetCount++
 	s.totalBytes += len(data)
-	s.updateIntervalStats(len(data), false)
+	s.updateIntervalStats(len(data))
 
 	now := time.Now()
 	s.handleIntervals(now)
@@ -136,16 +124,11 @@ func (s *brutalStream) Feed(rev bool, data []byte) (u *analyzer.PropUpdate, done
 }
 
 // 根据当前区间状态更新统计信息
-func (s *brutalStream) updateIntervalStats(byteCount int, dropped bool) {
+func (s *brutalStream) updateIntervalStats(byteCount int) {
 	if s.currentInterval == nil {
 		return
 	}
-	s.currentInterval.packetCount++
-	if !dropped {
-		s.currentInterval.byteCount += byteCount
-	} else {
-		s.currentInterval.lossCount++
-	}
+	s.currentInterval.byteCount += byteCount
 }
 
 // 尝试随机启动新的区间或者结束当前区间
@@ -185,24 +168,10 @@ func (s *brutalStream) evaluateIntervals() {
 		return
 	}
 
-	// 计算每个区间的 (字节速率 * (1 - 丢包率))
-	// 字节速率 = 区间内总字节数 / 区间时长(秒)
-	// 丢包率 = 区间内丢失包数 / 区间内总包数
-	// 我们需要 max-min 与平均值比较
+	// 计算每个区间的总字节数
 	vals := make([]float64, 0, intervalCount)
 	for _, iv := range s.intervals {
-		duration := iv.endTime.Sub(iv.startTime).Seconds()
-		if duration <= 0 {
-			// 理论上不可能，但以防万一
-			duration = 0.01 // 最小10ms
-		}
-		byteRate := float64(iv.byteCount) / duration
-		lossRate := 0.0
-		if iv.packetCount > 0 {
-			lossRate = float64(iv.lossCount) / float64(iv.packetCount)
-		}
-		val := byteRate * (1 - lossRate)
-		vals = append(vals, val)
+		vals = append(vals, float64(iv.byteCount))
 	}
 
 	if len(vals) == 0 {
@@ -226,8 +195,8 @@ func (s *brutalStream) evaluateIntervals() {
 
 	rangeVal := maxVal - minVal
 
-	// 判断极差是否小于平均数的2%
-	if avg > 0 && rangeVal < avg*0.02 {
+	// 判断极差是否小于平均数的5%
+	if avg > 0 && rangeVal < avg*0.05 {
 		// 阳性
 		s.score += positiveScoreIncrement
 	} else {
@@ -250,8 +219,7 @@ func (s *brutalStream) Close(limited bool) *analyzer.PropUpdate {
 		Type: analyzer.PropUpdateReplace,
 		M: analyzer.PropMap{
 			"packetCount": s.packetCount,
-			"lossCount":   s.lossCount,
-			"lossRate":    float64(s.lossCount) / float64(s.packetCount),
+			"totalBytes":  s.totalBytes,
 			"score":       s.score,
 			"blocked":     blocked,
 		},
