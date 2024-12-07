@@ -5,7 +5,7 @@ import (
     "encoding/binary"
     "sync"
 
-    "github.com/apernet/OpenGFW/analyzer"
+    "github.com/uquic/XGFW/analyzer"
 )
 
 // 常量定义
