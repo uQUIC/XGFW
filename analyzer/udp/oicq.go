@@ -5,7 +5,7 @@ import (
     "encoding/binary"
     "sync"
 
-    "github.com/uquic/XGFW/analyzer"
+    "github.com/uQUIC/XGFW/analyzer"
 )
 
 // 常量定义
