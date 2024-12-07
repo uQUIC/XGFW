@@ -81,7 +81,7 @@ type hysteria2Stream struct {
 
 	mutex          sync.Mutex
 	closeOnce      sync.Once
-	closeComplete  chan struct{}
+	closeComplete chan struct{}
 }
 
 // Feed 处理每个UDP包
@@ -119,7 +119,17 @@ func (s *hysteria2Stream) Feed(rev bool, data []byte) (*analyzer.PropUpdate, boo
 	}
 
 	// 提取 SNI
-	serverName := m.ServerName
+	// 假设 m 是 analyzer.PropMap，且包含 "ServerName" 键
+	serverNameRaw, ok := m["ServerName"]
+	if !ok {
+		return nil, false
+	}
+
+	serverName, ok := serverNameRaw.(string)
+	if !ok {
+		return nil, false
+	}
+
 	if !s.sniExtracted {
 		s.initialSNI = serverName
 		s.sniExtracted = true
