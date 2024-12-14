@@ -2,7 +2,7 @@ package udp
 
 import (
     "encoding/binary"
-    "github.com/uQUIC/XGFW/analyzer"
+    "github.com/uQUIC/XGFW/operation/protocol"
     "bytes"
 )
 
