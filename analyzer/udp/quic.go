@@ -1,10 +1,10 @@
 package udp
 
 import (
-	"github.com/uQUIC/XGFW/analyzer"
-	"github.com/uQUIC/XGFW/analyzer/internal"
-	"github.com/uQUIC/XGFW/analyzer/udp/internal/quic"
-	"github.com/uQUIC/XGFW/analyzer/utils"
+	"github.com/uQUIC/XGFW/operation/protocol"
+	"github.com/uQUIC/XGFW/operation/protocol/internal"
+	"github.com/uQUIC/XGFW/operation/protocol/udp/internal/quic"
+	"github.com/uQUIC/XGFW/operation/protocol/utils"
 )
 
 const (
