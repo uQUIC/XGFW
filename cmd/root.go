@@ -9,9 +9,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/uQUIC/XGFW/analyzer"
-	"github.com/uQUIC/XGFW/analyzer/tcp"
-	"github.com/uQUIC/XGFW/analyzer/udp"
+	"github.com/uQUIC/XGFW/operation/protocol"
+	"github.com/uQUIC/XGFW/operation/protocol/tcp"
+	"github.com/uQUIC/XGFW/operation/protocol/udp"
 	"github.com/uQUIC/XGFW/engine"
 	"github.com/uQUIC/XGFW/io"
 	"github.com/uQUIC/XGFW/modifier"
