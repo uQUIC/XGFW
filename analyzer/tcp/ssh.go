@@ -3,8 +3,8 @@ package tcp
 import (
 	"strings"
 
-	"github.com/uQUIC/XGFW/analyzer"
-	"github.com/uQUIC/XGFW/analyzer/utils"
+	"github.com/uQUIC/XGFW/operation/protocol"
+	"github.com/uQUIC/XGFW/operation/protocol/utils"
 )
 
 var _ analyzer.TCPAnalyzer = (*SSHAnalyzer)(nil)
