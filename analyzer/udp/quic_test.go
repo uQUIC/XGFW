@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/uQUIC/XGFW/analyzer"
+	"github.com/uQUIC/XGFW/operation/protocol"
 )
 
 func TestQuicStreamParsing_ClientHello(t *testing.T) {
