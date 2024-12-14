@@ -1,7 +1,7 @@
 package tcp
 
 import (
-	"github.com/uQUIC/XGFW/analyzer"
+	"github.com/uQUIC/XGFW/operation/protocol"
 	"github.com/uQUIC/XGFW/ruleset/builtins/tor"
 )
 
