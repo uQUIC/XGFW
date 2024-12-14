@@ -17,8 +17,8 @@ import (
 	"github.com/expr-lang/expr/vm"
 	"gopkg.in/yaml.v3"
 
-	"github.com/uQUIC/XGFW/analyzer"
-	"github.com/uQUIC/XGFW/analyzer/tcp"
+	"github.com/uQUIC/XGFW/operation/protocol"
+	"github.com/uQUIC/XGFW/operation/protocol/tcp"
 	"github.com/uQUIC/XGFW/modifier"
 	"github.com/uQUIC/XGFW/ruleset/builtins"
 )
