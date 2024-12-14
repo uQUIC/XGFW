@@ -5,7 +5,7 @@ import (
 	"net"
 	"sync"
 
-	"github.com/uQUIC/XGFW/analyzer"
+	"github.com/uQUIC/XGFW/operation/protocol"
 	"github.com/uQUIC/XGFW/io"
 	"github.com/uQUIC/XGFW/modifier"
 	"github.com/uQUIC/XGFW/ruleset"
