@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/uQUIC/XGFW/analyzer"
+	"github.com/uQUIC/XGFW/operation/protocol"
 )
 
 func TestHTTPParsing_Request(t *testing.T) {
