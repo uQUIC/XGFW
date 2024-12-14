@@ -6,7 +6,7 @@ import (
 	"slices"
 	"sync"
 
-	"github.com/uQUIC/XGFW/analyzer"
+	"github.com/uQUIC/XGFW/operation/protocol"
 )
 
 var (
