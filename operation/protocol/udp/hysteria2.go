@@ -10,10 +10,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/uQUIC/XGFW/operation/protocol"
-	"github.com/uQUIC/XGFW/operation/protocol/internal"
-	"github.com/uQUIC/XGFW/operation/protocol/udp/internal/quic"
-	"github.com/uQUIC/XGFW/operation/protocol/utils"
+	"github.com/uQUIC/XGFW/analyzer"
+	"github.com/uQUIC/XGFW/analyzer/internal"
+	"github.com/uQUIC/XGFW/analyzer/udp/internal/quic"
+	"github.com/uQUIC/XGFW/analyzer/utils"
 )
 
 // 常量定义
@@ -24,8 +24,8 @@ const (
 	testPortCount      = 10
 	serverPortMin      = 20000
 	serverPortMax      = 50000
-	highBandwidthBps   = 100_000_000 // 100 Mbps
-	twentyMinutes      = 20 * time.Minute
+	highBandwidthBps   = 500 * 8 * 1024 * 1024 // 500 MB in bits (500 * 8 * 1024 * 1024 bits)
+	tenMinutes         = 10 * time.Minute
 	dnsServer          = "1.1.1.1:53"
 	dnsTimeout         = 5 * time.Second
 	portRequestTimeout = 1 * time.Second
@@ -68,22 +68,20 @@ func (a *Hysteria2Analyzer) NewUDP(info analyzer.UDPInfo, logger analyzer.Logger
 
 // hysteria2Stream 实现 analyzer.UDPStream 接口
 type hysteria2Stream struct {
-	logger       analyzer.Logger
-	packetCount  int
-	totalBytes   int
-	startTime    time.Time
-	sni          string
-	sniExtracted bool
-	sniChanged   bool
-	initialSNI   string
+	logger      analyzer.Logger
+	packetCount int
+	totalBytes  int
+	startTime   time.Time
+	sni         string
 
 	serverIP   string
 	serverPort int
 
-	mutex          sync.Mutex
-	closeOnce      sync.Once
+	mutex        sync.Mutex
+	blocked      bool
+	randGen      *rand.Rand
+	closeOnce    sync.Once
 	closeComplete chan struct{}
-	randGen        *rand.Rand
 }
 
 // Feed 处理每个UDP包
@@ -132,15 +130,10 @@ func (s *hysteria2Stream) Feed(rev bool, data []byte) (*analyzer.PropUpdate, boo
 		return nil, false
 	}
 
-	if !s.sniExtracted {
-		s.initialSNI = serverName
-		s.sniExtracted = true
-	} else {
-		if s.initialSNI != serverName {
-			s.sniChanged = true
-		}
-	}
 	s.sni = serverName
+
+	// 检查是否需要进行封锁
+	go s.checkAndBlockIfNecessary()
 
 	return &analyzer.PropUpdate{
 		Type: analyzer.PropUpdateMerge,
@@ -157,55 +150,89 @@ func (s *hysteria2Stream) Close(limited bool) *analyzer.PropUpdate {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	var u *analyzer.PropUpdate
-
-	elapsed := time.Since(s.startTime)
-	// 判断条件：连接 >20分钟, 带宽 >100Mbps, SNI未变化
-	if elapsed >= twentyMinutes && s.totalBytes > 0 && !s.sniChanged && s.sni != "" && s.serverIP != "" {
-		// 计算带宽（bps）
-		bandwidthBps := float64(s.totalBytes*8) / elapsed.Seconds()
-		if bandwidthBps > float64(highBandwidthBps) {
-			// 检查服务器响应内容
-			returnSingle, err := checkServerResponses(s.serverIP, s.randGen)
-			if err == nil && returnSingle {
-				// 执行DNS查询
-				dnsIPs, err := resolveDNS(s.sni)
-				if err == nil {
-					// 检查DNS结果是否包含服务器IP
-					if !contains(dnsIPs, s.serverIP) {
-						// 判定为Hysteria2，封锁
-						s.logger.Infof("Hysteria2 detected for SNI: %s, IP: %s", s.sni, s.serverIP)
-						u = &analyzer.PropUpdate{
-							Type: analyzer.PropUpdateReplace,
-							M: analyzer.PropMap{
-								"blocked":         true,
-								"reason":          "hysteria-detected",
-								"packetCount":     s.packetCount,
-								"totalBytes":      s.totalBytes,
-								"elapsedSeconds":  elapsed.Seconds(),
-								"sni":             s.sni,
-							},
-						}
-						return u
-					}
-				}
-			}
+	if s.blocked {
+		// 已封锁，无需额外处理
+		return &analyzer.PropUpdate{
+			Type: analyzer.PropUpdateReplace,
+			M: analyzer.PropMap{
+				"blocked": true,
+				"reason":  "hysteria-detected",
+			},
 		}
 	}
 
-	// 未触发封锁条件
-	u = &analyzer.PropUpdate{
+	// 未触发封锁条件，返回连接的统计信息
+	return &analyzer.PropUpdate{
 		Type: analyzer.PropUpdateReplace,
 		M: analyzer.PropMap{
 			"packetCount":    s.packetCount,
 			"totalBytes":     s.totalBytes,
-			"elapsedSeconds": elapsed.Seconds(),
+			"elapsedSeconds": time.Since(s.startTime).Seconds(),
 			"sni":            s.sni,
 			"blocked":        false,
 		},
 	}
+}
 
-	return u
+// checkAndBlockIfNecessary 检查连接是否满足封锁条件，并执行封锁
+func (s *hysteria2Stream) checkAndBlockIfNecessary() {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	if s.blocked {
+		// 已封锁，无需重复操作
+		return
+	}
+
+	elapsed := time.Since(s.startTime)
+	if elapsed < tenMinutes {
+		return
+	}
+
+	if float64(s.totalBytes*8) < float64(highBandwidthBps)*elapsed.Seconds() {
+		return
+	}
+
+	// 满足时间和带宽条件，执行检测逻辑
+	go func() {
+		// 执行检测逻辑
+		returnSingle, err := checkServerResponses(s.serverIP, s.randGen)
+		if err != nil {
+			s.logger.Errorf("Server response check failed: %v", err)
+			return
+		}
+
+		if returnSingle {
+			// 执行DNS查询
+			dnsIPs, err := resolveDNS(s.sni)
+			if err != nil {
+				s.logger.Errorf("DNS resolution failed: %v", err)
+				return
+			}
+
+			if !contains(dnsIPs, s.serverIP) {
+				// 判定为Hysteria2，封锁连接
+				s.mutex.Lock()
+				s.blocked = true
+				s.mutex.Unlock()
+
+				s.logger.Infof("Hysteria2 detected for SNI: %s, IP: %s", s.sni, s.serverIP)
+
+				// 发送封锁PropUpdate
+				analyzer.UpdateProp(s.closeComplete, &analyzer.PropUpdate{
+					Type: analyzer.PropUpdateReplace,
+					M: analyzer.PropMap{
+						"blocked":         true,
+						"reason":          "hysteria-detected",
+						"packetCount":     s.packetCount,
+						"totalBytes":      s.totalBytes,
+						"elapsedSeconds":  elapsed.Seconds(),
+						"sni":             s.sni,
+					},
+				})
+			}
+		}
+	}()
 }
 
 // checkServerResponses 检查服务器 20000-50000 端口中任意10个端口的响应内容是否返回单一
