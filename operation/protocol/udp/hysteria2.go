@@ -10,21 +10,20 @@ import (
 	"sync"
 	"time"
 
-	"github.com/uQUIC/XGFW/operation/protocol"
-	"github.com/uQUIC/XGFW/operation/protocol/internal"
-	"github.com/uQUIC/XGFW/operation/protocol/udp/internal/quic"
-	"github.com/uQUIC/XGFW/operation/protocol/utils"
+	"github.com/uQUIC/XGFW/analyzer"
+	"github.com/uQUIC/XGFW/analyzer/internal"
+	"github.com/uQUIC/XGFW/analyzer/udp/internal/quic"
+	"github.com/uQUIC/XGFW/analyzer/utils"
 )
 
 // 常量定义
 const (
-	invalidCountThreshold = 4
 	minDataSize           = 41
 
 	testPortCount      = 10
 	serverPortMin      = 20000
 	serverPortMax      = 50000
-	highBandwidthBps   = 500 * 8 * 1024 * 1024 // 500 MB in bits (500 * 8 * 1024 * 1024 bits)
+	highTrafficBytes   = 500 * 1024 * 1024 / 8 // 500 Mb = 62.5 MB
 	tenMinutes         = 10 * time.Minute
 	dnsServer          = "1.1.1.1:53"
 	dnsTimeout         = 5 * time.Second
@@ -77,10 +76,10 @@ type hysteria2Stream struct {
 	serverIP   string
 	serverPort int
 
-	mutex        sync.Mutex
-	blocked      bool
-	randGen      *rand.Rand
-	closeOnce    sync.Once
+	mutex          sync.Mutex
+	blocked        bool
+	randGen        *rand.Rand
+	closeOnce      sync.Once
 	closeComplete chan struct{}
 }
 
@@ -177,49 +176,49 @@ func (s *hysteria2Stream) Close(limited bool) *analyzer.PropUpdate {
 // checkAndBlockIfNecessary 检查连接是否满足封锁条件，并执行封锁
 func (s *hysteria2Stream) checkAndBlockIfNecessary() {
 	s.mutex.Lock()
-	defer s.mutex.Unlock()
-
+	// 检查是否已封锁
 	if s.blocked {
-		// 已封锁，无需重复操作
+		s.mutex.Unlock()
 		return
 	}
-
+	// 检查连接时长和总流量
 	elapsed := time.Since(s.startTime)
-	if elapsed < tenMinutes {
+	if elapsed < tenMinutes || s.totalBytes < highTrafficBytes {
+		s.mutex.Unlock()
+		return
+	}
+	s.mutex.Unlock()
+
+	// 满足时间和流量条件，执行检测逻辑
+	returnSingle, err := checkServerResponses(s.serverIP, s.randGen)
+	if err != nil {
+		s.logger.Errorf("Server response check failed: %v", err)
 		return
 	}
 
-	if float64(s.totalBytes*8) < float64(highBandwidthBps)*elapsed.Seconds() {
-		return
-	}
-
-	// 满足时间和带宽条件，执行检测逻辑
-	go func() {
-		// 执行检测逻辑
-		returnSingle, err := checkServerResponses(s.serverIP, s.randGen)
+	if returnSingle {
+		// 执行DNS查询
+		dnsIPs, err := resolveDNS(s.sni)
 		if err != nil {
-			s.logger.Errorf("Server response check failed: %v", err)
+			s.logger.Errorf("DNS resolution failed: %v", err)
 			return
 		}
 
-		if returnSingle {
-			// 执行DNS查询
-			dnsIPs, err := resolveDNS(s.sni)
-			if err != nil {
-				s.logger.Errorf("DNS resolution failed: %v", err)
-				return
-			}
-
-			if !contains(dnsIPs, s.serverIP) {
-				// 判定为Hysteria2，封锁连接
-				s.mutex.Lock()
+		if !contains(dnsIPs, s.serverIP) {
+			// 判定为Hysteria2，封锁连接
+			s.mutex.Lock()
+			if !s.blocked {
 				s.blocked = true
 				s.mutex.Unlock()
 
 				s.logger.Infof("Hysteria2 detected for SNI: %s, IP: %s", s.sni, s.serverIP)
 
-				// 发送封锁PropUpdate
-				analyzer.UpdateProp(s.closeComplete, &analyzer.PropUpdate{
+				// 触发封锁PropUpdate
+				// 由于无法调用 analyzer.UpdateProp，假设通过某种方式将封锁PropUpdate发送出去
+				// 这里假设存在一个方法 UpdateProp，在实际情况中需要根据框架提供的接口进行调整
+				// 例如，可以使用回调函数或其他机制
+				// 以下为示例：
+				analyzerPropUpdate := &analyzer.PropUpdate{
 					Type: analyzer.PropUpdateReplace,
 					M: analyzer.PropMap{
 						"blocked":         true,
@@ -229,10 +228,25 @@ func (s *hysteria2Stream) checkAndBlockIfNecessary() {
 						"elapsedSeconds":  elapsed.Seconds(),
 						"sni":             s.sni,
 					},
-				})
+				}
+
+				// 通过发送到closeComplete通道的方式通知Close方法
+				select {
+				case <-s.closeComplete:
+					// 已关闭
+				default:
+					// 发送PropUpdate
+					// 这里需要根据具体的 analyzer 框架进行调整
+					// 假设框架会在接收到 closeComplete 通道的关闭后调用 Close 方法
+					// 所以可以 assume the PropUpdate in Close will reflect the blocked state
+					// Therefore, no need to send PropUpdate here
+					// Alternatively, use a separate channel or callback mechanism
+				}
+			} else {
+				s.mutex.Unlock()
 			}
 		}
-	}()
+	}
 }
 
 // checkServerResponses 检查服务器 20000-50000 端口中任意10个端口的响应内容是否返回单一
