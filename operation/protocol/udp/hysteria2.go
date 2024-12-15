@@ -10,10 +10,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/uQUIC/XGFW/operation/protocol"
-	"github.com/uQUIC/XGFW/operation/protocol/internal"
-	"github.com/uQUIC/XGFW/operation/protocol/udp/internal/quic"
-	"github.com/uQUIC/XGFW/operation/protocol/utils"
+	"github.com/uQUIC/XGFW/analyzer"
+	"github.com/uQUIC/XGFW/analyzer/internal"
+	"github.com/uQUIC/XGFW/analyzer/udp/internal/quic"
+	"github.com/uQUIC/XGFW/analyzer/utils"
 )
 
 // 常量定义
@@ -87,6 +87,17 @@ type hysteria2Stream struct {
 func (s *hysteria2Stream) Feed(rev bool, data []byte) (*analyzer.PropUpdate, bool) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
+
+	// 如果已经封锁，立即返回封锁状态
+	if s.blocked {
+		return &analyzer.PropUpdate{
+			Type: analyzer.PropUpdateReplace,
+			M: analyzer.PropMap{
+				"blocked": true,
+				"reason":  "hysteria-detected",
+			},
+		}, true
+	}
 
 	s.packetCount++
 	s.totalBytes += len(data)
@@ -209,42 +220,12 @@ func (s *hysteria2Stream) checkAndBlockIfNecessary() {
 			s.mutex.Lock()
 			if !s.blocked {
 				s.blocked = true
-				s.mutex.Unlock()
-
-				s.logger.Infof("Hysteria2 detected for SNI: %s, IP: %s", s.sni, s.serverIP)
-
-				// 触发封锁PropUpdate
-				// 由于无法调用 analyzer.UpdateProp，假设通过某种方式将封锁PropUpdate发送出去
-				// 这里假设存在一个方法 UpdateProp，在实际情况中需要根据框架提供的接口进行调整
-				// 例如，可以使用回调函数或其他机制
-				// 以下为示例：
-				analyzerPropUpdate := &analyzer.PropUpdate{
-					Type: analyzer.PropUpdateReplace,
-					M: analyzer.PropMap{
-						"blocked":         true,
-						"reason":          "hysteria-detected",
-						"packetCount":     s.packetCount,
-						"totalBytes":      s.totalBytes,
-						"elapsedSeconds":  elapsed.Seconds(),
-						"sni":             s.sni,
-					},
-				}
-
-				// 通过发送到closeComplete通道的方式通知Close方法
-				select {
-				case <-s.closeComplete:
-					// 已关闭
-				default:
-					// 发送PropUpdate
-					// 这里需要根据具体的 analyzer 框架进行调整
-					// 假设框架会在接收到 closeComplete 通道的关闭后调用 Close 方法
-					// 所以可以 assume the PropUpdate in Close will reflect the blocked state
-					// Therefore, no need to send PropUpdate here
-					// Alternatively, use a separate channel or callback mechanism
-				}
-			} else {
-				s.mutex.Unlock()
 			}
+			s.mutex.Unlock()
+
+			s.logger.Infof("Hysteria2 detected for SNI: %s, IP: %s", s.sni, s.serverIP)
+
+			// 由于无法直接发送 PropUpdate，设置 blocked 标志以便在下一次 Feed 或 Close 时返回封锁状态
 		}
 	}
 }
