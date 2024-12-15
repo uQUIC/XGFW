@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/uQUIC/XGFW/analyzer"
+	"github.com/uQUIC/XGFW/operation/protocol"
 )
 
 // 确保接口实现
