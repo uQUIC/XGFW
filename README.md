@@ -36,4 +36,3 @@ XGFW is your very own DIY Great Firewall of China (https://en.wikipedia.org/wiki
 - Malware protection
 - Abuse prevention for VPN/proxy services
 - Traffic analysis (log only mode)
-- Help you fulfill your dictatorial ambitions
