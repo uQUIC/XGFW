@@ -32,7 +32,7 @@ const (
 █ █ ▀▀▀░▀░░░▀░▀
 `
 	appDesc    = "Open source network filtering and analysis software"
-	appAuthors = "Aperture Internet Laboratory <https://github.com/apernet>"
+	appAuthors = "Project Ether <https://github.com/uQUIC>"
 
 	appLogLevelEnv  = "OPENGFW_LOG_LEVEL"
 	appLogFormatEnv = "OPENGFW_LOG_FORMAT"
