@@ -18,7 +18,7 @@ XGFW is your very own DIY Great Firewall of China (https://en.wikipedia.org/wiki
   - "Fully encrypted traffic" detection for Shadowsocks, VMess,
     etc. (https://gfw.report/publications/usenixsecurity23/en/)
   - Trojan (proxy protocol) detection
-  - Hysteria2 (proxy protocol) detection
+  - Hysteria2 (proxy protocol) detection (not for production use, DO NOT WORK)
   - [WIP] Machine learning based traffic classification
 - Full IPv4 and IPv6 support
 - Flow-based multicore load balancing
