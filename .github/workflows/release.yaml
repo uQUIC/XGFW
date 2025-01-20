@@ -30,14 +30,14 @@ jobs:
         id: tag
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            # Create a new tag based on the current date-time or use latest commit SHA
-            TAG="manual-$(date +'%Y%m%d%H%M%S')"
+            # Create a 16-digit random number tag
+            TAG="$(openssl rand -hex 8)"  # 8 bytes = 16 hex digits
             git tag "$TAG"
             git push origin "$TAG"
           else
             TAG="${{ github.ref_name }}"
           fi
-          echo "::set-output name=TAG::$TAG"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
 
       - name: Build
         env:
@@ -54,4 +54,4 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: build/*.zip # Uploads each individual zip file
-          tag_name: ${{ steps.tag.outputs.TAG }}
+          tag_name: ${{ steps.tag.outputs.tag }}
