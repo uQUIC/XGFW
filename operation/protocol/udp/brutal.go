@@ -1,33 +1,35 @@
 package udp
 
 import (
+	"math/rand"
+	"time"
+
 	"github.com/uQUIC/XGFW/operation/protocol"
 	"github.com/uQUIC/XGFW/operation/protocol/internal"
 	"github.com/uQUIC/XGFW/operation/protocol/udp/internal/quic"
 	"github.com/uQUIC/XGFW/operation/protocol/utils"
-	"math/rand"
-	"time"
 )
 
+// 常量
 const (
 	brutalInvalidCountThreshold = 4
-	// brutalMaxPacketLossRate     = 0.02 // 最大丢包率 2% 已移除
 
-	// 新添加的参数（可自定义）
 	positiveScoreIncrement = 2  // 阳性时加分
 	negativeScoreDecrement = 1  // 阴性时减分，不可减至负数
-	blockThreshold         = 20 // 总分大于此值则封锁
+	blockThreshold         = 20 // 分数大于此值则封锁
 
-	intervalCount     = 5                      // 总共需要随机选择的区间数
-	intervalDuration  = 10 * time.Millisecond  // 每个区间的持续时间
-	intervalStartChance = 0.01                // 每次 Feed 尝试启动区间的概率
+	intervalCount      = 5                       // 需要收集的区间数量
+	intervalDuration   = 10 * time.Millisecond   // 每个区间持续时间
+	intervalStartChance = 0.01                   // 每次 Feed 启动区间的随机概率
 )
 
+// 确保实现接口
 var (
 	_ analyzer.UDPAnalyzer = (*BrutalAnalyzer)(nil)
 	_ analyzer.UDPStream   = (*brutalStream)(nil)
 )
 
+// BrutalAnalyzer 实现 analyzer.UDPAnalyzer
 type BrutalAnalyzer struct{}
 
 func (a *BrutalAnalyzer) Name() string {
@@ -41,63 +43,77 @@ func (a *BrutalAnalyzer) Limit() int {
 func (a *BrutalAnalyzer) NewUDP(info analyzer.UDPInfo, logger analyzer.Logger) analyzer.UDPStream {
 	return &brutalStream{
 		logger: logger,
-		score:  0, // 初始分数
+		score:  0,
 	}
 }
 
+// intervalData 用于记录一个区间内的字节数
 type intervalData struct {
 	byteCount int
 	startTime time.Time
 	endTime   time.Time
 }
 
+// brutalStream 实现 analyzer.UDPStream
 type brutalStream struct {
-	logger          analyzer.Logger
-	invalidCount    int
-	packetCount     int
-	totalBytes      int // 累计收到的总字节数
-	lastTime        time.Time
+	logger       analyzer.Logger
+	invalidCount int
+	packetCount  int
+	totalBytes   int
+	lastTime     time.Time
 
-	// 容错机制相关
-	score            int // 当前总得分
-	intervals        []intervalData
-	currentInterval  *intervalData
-	intervalsDone    int
+	score            int             // 当前得分
+	intervals        []intervalData  // 已结束的区间
+	currentInterval  *intervalData   // 正在进行的区间
+	intervalsDone    int             // 已完成的区间计数
+	allIntervalsDone bool            // 是否已完成5个区间的数据收集
 
-	// 标记当前是否已经完成了5个区间的选择和统计
-	allIntervalsDone bool
+	blocked bool // 是否已经触发阻断
 }
 
-// 在 Feed 中模拟统计数据
+// Feed 每次接收 UDP 包时调用
 func (s *brutalStream) Feed(rev bool, data []byte) (u *analyzer.PropUpdate, done bool) {
-	// 丢包模拟已移除
-
+	// 先做基础统计
 	s.packetCount++
 	s.totalBytes += len(data)
+
+	// 更新当前区间的字节数
 	s.updateIntervalStats(len(data))
 
+	// 处理区间 (收集5个区间的数据)
 	now := time.Now()
 	s.handleIntervals(now)
 
-	// 不需要对是否是 brutal 做初步判定的逻辑，直接移除
-
-	s.lastTime = now
-
-	// 最小数据包大小: 协议版本 (2 字节) + 随机数 (32 字节) + 会话ID (1 字节) + 密码套件 (4 字节) + 压缩方法 (2 字节) + 无扩展
-	const minDataSize = 41
-
-	if rev {
-		// 不支持服务器方向的流量
-		s.invalidCount++
-		return nil, s.invalidCount >= brutalInvalidCountThreshold
+	// 如果已经被阻断，直接返回
+	if s.blocked {
+		return &analyzer.PropUpdate{
+			Type: analyzer.PropUpdateReplace,
+			M: analyzer.PropMap{
+				"blocked": true,
+				"reason":  "brutal-threshold-exceed",
+				"score":   s.score,
+			},
+		}, true
 	}
 
+	// 以下是对服务器->客户端方向包、或加密数据完整性的检查
+	// 如果是服务器方向的流量 (rev == true)，这里不做深入分析
+	if rev {
+		s.invalidCount++
+		// 若无效包过多，直接结束
+		if s.invalidCount >= brutalInvalidCountThreshold {
+			return nil, true
+		}
+		return nil, false
+	}
+
+	// 尝试解析 QUIC ClientHello
+	const minDataSize = 41
 	pl, err := quic.ReadCryptoPayload(data)
 	if err != nil || len(pl) < 4 {
 		s.invalidCount++
 		return nil, s.invalidCount >= brutalInvalidCountThreshold
 	}
-
 	if pl[0] != internal.TypeClientHello {
 		s.invalidCount++
 		return nil, s.invalidCount >= brutalInvalidCountThreshold
@@ -116,14 +132,26 @@ func (s *brutalStream) Feed(rev bool, data []byte) (u *analyzer.PropUpdate, done
 		return nil, s.invalidCount >= brutalInvalidCountThreshold
 	}
 
-	// 返回数据流的更新，包括当前请求信息
+	// 再次检查: 在解析后，也看看是否在这次处理里已经被 block
+	if s.blocked {
+		return &analyzer.PropUpdate{
+			Type: analyzer.PropUpdateReplace,
+			M: analyzer.PropMap{
+				"blocked": true,
+				"reason":  "brutal-threshold-exceed",
+				"score":   s.score,
+			},
+		}, true
+	}
+
+	// 正常合并属性
 	return &analyzer.PropUpdate{
 		Type: analyzer.PropUpdateMerge,
 		M:    analyzer.PropMap{"req": m},
 	}, true
 }
 
-// 根据当前区间状态更新统计信息
+// updateIntervalStats 更新当前正在进行的区间的字节数
 func (s *brutalStream) updateIntervalStats(byteCount int) {
 	if s.currentInterval == nil {
 		return
@@ -131,54 +159,58 @@ func (s *brutalStream) updateIntervalStats(byteCount int) {
 	s.currentInterval.byteCount += byteCount
 }
 
-// 尝试随机启动新的区间或者结束当前区间
+// handleIntervals 处理区间逻辑：随机启动区间、在区间超过10ms后结束并统计
 func (s *brutalStream) handleIntervals(now time.Time) {
 	if s.allIntervalsDone {
 		return
 	}
 
-	// 如果当前没有正在进行的区间且还需要收集区间数据
+	// 如果当前没有正在进行的区间，并且还没收集到5个区间
 	if s.currentInterval == nil && s.intervalsDone < intervalCount {
-		// 随机概率启动一个区间
+		// 用一定概率启动新区间
 		if rand.Float64() < intervalStartChance {
 			s.currentInterval = &intervalData{
 				startTime: now,
 			}
 		}
 	} else if s.currentInterval != nil {
-		// 判断是否已超过10ms
+		// 如果已到达区间持续时间，则结束该区间
 		if now.Sub(s.currentInterval.startTime) >= intervalDuration {
 			s.currentInterval.endTime = now
 			s.intervals = append(s.intervals, *s.currentInterval)
 			s.currentInterval = nil
 			s.intervalsDone++
 
+			// 若已经收集满5个区间，进行评估
 			if s.intervalsDone == intervalCount {
-				// 完成5个区间的收集
 				s.allIntervalsDone = true
 				s.evaluateIntervals()
+
+				// 若评估完分数超过阈值，立刻阻断
+				if s.score > blockThreshold {
+					s.blocked = true
+				}
 			}
 		}
 	}
 }
 
-// 对5个区间进行计算与评分
+// evaluateIntervals 对 5 个区间进行评估并更新分数
 func (s *brutalStream) evaluateIntervals() {
 	if len(s.intervals) < intervalCount {
 		return
 	}
 
-	// 计算每个区间的总字节数
+	// 收集每个区间的字节数
 	vals := make([]float64, 0, intervalCount)
 	for _, iv := range s.intervals {
 		vals = append(vals, float64(iv.byteCount))
 	}
-
 	if len(vals) == 0 {
 		return
 	}
 
-	// 计算max, min, avg
+	// 计算 max, min, avg
 	maxVal := vals[0]
 	minVal := vals[0]
 	sum := 0.0
@@ -195,12 +227,11 @@ func (s *brutalStream) evaluateIntervals() {
 
 	rangeVal := maxVal - minVal
 
-	// 判断极差是否小于平均数的5%
+	// 如果极差 < 平均数的5%，视为“阳性” => 加分
 	if avg > 0 && rangeVal < avg*0.05 {
-		// 阳性
 		s.score += positiveScoreIncrement
 	} else {
-		// 阴性
+		// 否则阴性 => 减分（分数不低于0）
 		s.score -= negativeScoreDecrement
 		if s.score < 0 {
 			s.score = 0
@@ -208,12 +239,13 @@ func (s *brutalStream) evaluateIntervals() {
 	}
 }
 
+// Close 在流结束时返回统计信息，如 blocked 与否、score 等
 func (s *brutalStream) Close(limited bool) *analyzer.PropUpdate {
-	// 如果还有正在进行的区间，在close前无法完整统计，这里不再继续
-	// 如果区间未满5个，则也无法进行最后的评估
-	// 已在 evaluateIntervals 中更新 s.score
-	// 判断是否分数大于20则封锁
-	blocked := s.score > blockThreshold
+	// 如果尚未标记 blocked，则再做一次终止判断
+	blocked := s.blocked || (s.score > blockThreshold)
+	if blocked {
+		s.blocked = true
+	}
 
 	return &analyzer.PropUpdate{
 		Type: analyzer.PropUpdateReplace,
@@ -221,7 +253,7 @@ func (s *brutalStream) Close(limited bool) *analyzer.PropUpdate {
 			"packetCount": s.packetCount,
 			"totalBytes":  s.totalBytes,
 			"score":       s.score,
-			"blocked":     blocked,
+			"blocked":     s.blocked,
 		},
 	}
 }
