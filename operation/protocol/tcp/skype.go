@@ -13,9 +13,6 @@ import (
     "github.com/google/gopacket"
     "github.com/google/gopacket/pcap"
     "github.com/google/gopacket/layers"
-
-    // XGFW 本身的接口所在包，请根据实际路径修改
-    "github.com/uQUIC/XGFW/operation/analyzer"
 )
 
 // =================== 原始检测代码（保持原状，包名改为 tcp） =================== //
