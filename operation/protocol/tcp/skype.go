@@ -13,6 +13,9 @@ import (
     "github.com/google/gopacket"
     "github.com/google/gopacket/pcap"
     "github.com/google/gopacket/layers"
+
+    "github.com/uQUIC/XGFW/operation/protocol"
+	"github.com/uQUIC/XGFW/operation/protocol/utils"
 )
 
 // =================== 原始检测代码（保持原状，包名改为 tcp） =================== //
