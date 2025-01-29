@@ -31,8 +31,6 @@ func (a *SkypeMorphAnalyzer) NewUDP(info analyzer.UDPInfo, logger analyzer.Logge
 type skypeMorphStream struct {
     logger   analyzer.Logger
     first    bool
-    count    bool
-    rev      bool
     seq      [4]int
     seqIndex int
     features []PacketFeatures
@@ -126,9 +124,5 @@ func (s *skypeMorphStream) analyzeTraffic() bool {
             heartbeatCount++
         }
     }
-    if heartbeatCount >= len(intervals)/3 {
-        return true
-    }
-
-    return false
+    return heartbeatCount >= len(intervals)/3
 }
