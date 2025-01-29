@@ -4,6 +4,7 @@ import (
     "bytes"
     "crypto/sha256"
     "fmt"
+    "log"
     "time"
 
     "github.com/uQUIC/XGFW/operation/protocol"
@@ -82,7 +83,7 @@ func (s *skypeMorphStream) Feed(rev, start, end bool, skip int, data []byte) (u 
     if s.shouldAnalyze() {
         isSkypeMorph := s.analyzeTraffic()
         if isSkypeMorph {
-            s.logger.Log("INFO", "Detected SkypeMorph traffic")
+            log.Printf("INFO: Detected SkypeMorph traffic")
             return &analyzer.PropUpdate{
                 Type: analyzer.PropUpdateReplace,
                 M: analyzer.PropMap{
