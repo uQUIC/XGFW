@@ -14,14 +14,6 @@ import (
 
 var _ analyzer.TCPAnalyzer = (*SkypeAnalyzer)(nil)
 
-// Skype pattern signatures
-var skypePatterns = [][]byte{
-    {0x02, 0x01, 0x47, 0x49}, // header
-    {0x02, 0x00},             // keepalive
-    {0x02, 0x0D},             // audio
-    {0x02, 0x0E},             // video
-}
-
 // SkypeAnalyzer detects Skype traffic using pattern matching and behavioral analysis.
 type SkypeAnalyzer struct{}
 
