@@ -28,7 +28,7 @@ func (a *SkypeAnalyzer) Limit() int {
 func (a *SkypeAnalyzer) NewUDP(info analyzer.UDPInfo, logger analyzer.Logger) analyzer.UDPStream {
     state := &ConnectionState{
         StartTime: time.Now(),
-        Features:  make([]PacketFeatures, 0, 1000),
+        Features:  make([]SkypePacketFeatures, 0, 1000),
         SrcPort:   uint16(info.SrcPort),
         DstPort:   uint16(info.DstPort),
         SrcIP:     info.SrcIP, // Already net.IP type, no need to parse
@@ -54,10 +54,7 @@ type skypeStream struct {
     blocked  bool
 }
 
-func (s *skypeStream) Feed(rev, start, end bool, skip int, data []byte) (*analyzer.PropUpdate, bool) {
-    if skip != 0 {
-        return nil, true
-    }
+func (s *skypeStream) Feed(rev bool, data []byte) (*analyzer.PropUpdate, bool) {
     if len(data) == 0 {
         return nil, false
     }
@@ -95,12 +92,13 @@ type ConnectionState struct {
     LastSeen         time.Time
     PacketCount      uint32
     BytesTransferred uint64
-    Features         []PacketFeatures
+    Features         []SkypePacketFeatures
     IsBlocked        bool
     mu               sync.Mutex
 }
 
-type PacketFeatures struct {
+// SkypePacketFeatures stores packet-specific features for Skype
+type SkypePacketFeatures struct {
     Size        uint16
     PayloadHash [32]byte
     Timestamp   time.Time
@@ -130,8 +128,8 @@ func initializeTLSFingerprints() map[string]bool {
     }
 }
 
-func (sd *SkypeDetector) extractFeatures(data []byte, rev bool) *PacketFeatures {
-    f := &PacketFeatures{
+func (sd *SkypeDetector) extractFeatures(data []byte, rev bool) *SkypePacketFeatures {
+    f := &SkypePacketFeatures{
         Size:      uint16(len(data)),
         Timestamp: time.Now(),
         Protocol:  1, // UDP
@@ -145,7 +143,7 @@ func (sd *SkypeDetector) extractFeatures(data []byte, rev bool) *PacketFeatures 
     return f
 }
 
-func (sd *SkypeDetector) deepPacketInspection(features *PacketFeatures) bool {
+func (sd *SkypeDetector) deepPacketInspection(features *SkypePacketFeatures) bool {
     sd.connState.mu.Lock()
     defer sd.connState.mu.Unlock()
 
