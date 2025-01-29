@@ -1,67 +1,43 @@
 package tcp
 
-import (
-    "math/rand"
-    "os"
-    "strconv"
-    "time"
+import "github.com/uQUIC/XGFW/operation/protocol"
 
-    "github.com/uQUIC/XGFW/operation/protocol"
-)
+var _ analyzer.TCPAnalyzer = (*FETAnalyzer)(nil)
 
-const (
-    defaultDropRate = 10 // 默认丢包率为10%
-)
-
-var _ analyzer.TCPAnalyzer = (*FETQoSAnalyzer)(nil)
-
-// FETQoSAnalyzer stands for "Fully Encrypted Traffic QoS" analyzer.
+// FETAnalyzer stands for "Fully Encrypted Traffic" analyzer.
 // It implements an algorithm to detect fully encrypted proxy protocols
 // such as Shadowsocks, mentioned in the following paper:
 // https://gfw.report/publications/usenixsecurity23/data/paper/paper.pdf
-type FETQoSAnalyzer struct{}
+type FETAnalyzer struct{}
 
-func (a *FETQoSAnalyzer) Name() string {
-    return "fet-qos"
+func (a *FETAnalyzer) Name() string {
+    return "fet"
 }
 
-func (a *FETQoSAnalyzer) Limit() int {
+func (a *FETAnalyzer) Limit() int {
     // We only really look at the first packet
     return 8192
 }
 
-func (a *FETQoSAnalyzer) NewTCP(info analyzer.TCPInfo, logger analyzer.Logger) analyzer.TCPStream {
-    dropRate := getDropRate()
-    return newFETQoSStream(logger, dropRate)
+func (a *FETAnalyzer) NewTCP(info analyzer.TCPInfo, logger analyzer.Logger) analyzer.TCPStream {
+    return newFETStream(logger)
 }
 
-type fetQoSStream struct {
-    logger   analyzer.Logger
-    dropRate int    // 丢包率
-    rand     *rand.Rand
+type fetStream struct {
+    logger analyzer.Logger
 }
 
-func newFETQoSStream(logger analyzer.Logger, dropRate int) *fetQoSStream {
-    return &fetQoSStream{
-        logger:   logger,
-        dropRate: dropRate,
-        rand:     rand.New(rand.NewSource(time.Now().UnixNano())),
-    }
+func newFETStream(logger analyzer.Logger) *fetStream {
+    return &fetStream{logger: logger}
 }
 
-func (s *fetQoSStream) Feed(rev, start, end bool, skip int, data []byte) (u *analyzer.PropUpdate, done bool) {
+func (s *fetStream) Feed(rev, start, end bool, skip int, data []byte) (u *analyzer.PropUpdate, done bool) {
     if skip != 0 {
         return nil, true
     }
     if len(data) == 0 {
         return nil, false
     }
-
-    // 根据丢包率决定是否丢弃数据包
-    if s.rand.Float64()*100 < float64(s.dropRate) {
-        return nil, false
-    }
-
     ex1 := averagePopCount(data)
     ex2 := isFirstSixPrintable(data)
     ex3 := printablePercentage(data)
@@ -81,7 +57,7 @@ func (s *fetQoSStream) Feed(rev, start, end bool, skip int, data []byte) (u *ana
     }, true
 }
 
-func (s *fetQoSStream) Close(limited bool) *analyzer.PropUpdate {
+func (s *fetStream) Close(limited bool) *analyzer.PropUpdate {
     return nil
 }
 
@@ -183,19 +159,4 @@ func isTLSorHTTP(bytes []byte) bool {
 
 func isPrintable(b byte) bool {
     return b >= 0x20 && b <= 0x7e
-}
-
-// getDropRate 从环境变量中获取丢包率，默认值为10%
-func getDropRate() int {
-    dropRateStr := os.Getenv("FET_DROP_RATE")
-    if dropRateStr == "" {
-        return defaultDropRate
-    }
-
-    dropRate, err := strconv.Atoi(dropRateStr)
-    if err != nil || dropRate < 0 || dropRate > 100 {
-        return defaultDropRate
-    }
-
-    return dropRate
 }
