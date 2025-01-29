@@ -6,7 +6,7 @@ import (
     "fmt"
     "time"
 
-    "github.com/uQUIC/XGFW/operation/protocol/analyzer"
+    "github.com/uQUIC/XGFW/operation/protocol"
 )
 
 var _ analyzer.UDPAnalyzer = (*SkypeMorphAnalyzer)(nil)
