@@ -25,8 +25,6 @@ const (
     serverPortMax      = 50000
     highTrafficBytes   = 500 * 1024 * 1024 / 8 // 500 Mb = 62.5 MB
     tenMinutes         = 10 * time.Minute
-    dnsServer          = "1.1.1.1:53"
-    dnsTimeout         = 5 * time.Second
     portRequestTimeout = 1 * time.Second
 )
 
@@ -212,21 +210,10 @@ func (s *hysteria2Stream) checkAndBlockIfNecessary() bool {
         return false
     }
 
-    // 进行DNS查询
-    dnsIPs, err := resolveDNS(s.sni)
-    if err != nil {
-        s.logger.Errorf("DNS resolution failed: %v", err)
-        return false
-    }
-
-    // 如果解析到的DNS IP和serverIP不符，则认为命中Hysteria2
-    if !contains(dnsIPs, s.serverIP) {
-        s.blocked = true
-        s.logger.Infof("Hysteria2 detected for SNI: %s, IP: %s", s.sni, s.serverIP)
-        return true
-    }
-
-    return false
+    // 设置封锁状态
+    s.blocked = true
+    s.logger.Infof("Hysteria2 detected for SNI: %s, IP: %s", s.sni, s.serverIP)
+    return true
 }
 
 // 下面函数的逻辑保持与原始代码相同
@@ -308,24 +295,6 @@ func sendUDPRequest(ip string, port int, message []byte) (string, error) {
         return "", err
     }
     return string(buf[:n]), nil
-}
-
-func resolveDNS(sni string) ([]string, error) {
-    r := &net.Resolver{
-        PreferGo: true,
-        Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
-            d := net.Dialer{Timeout: dnsTimeout}
-            return d.DialContext(ctx, "udp", dnsServer)
-        },
-    }
-    ctx, cancel := context.WithTimeout(context.Background(), dnsTimeout)
-    defer cancel()
-
-    ips, err := r.LookupHost(ctx, sni)
-    if err != nil {
-        return nil, err
-    }
-    return ips, nil
 }
 
 func contains(slice []string, item string) bool {
