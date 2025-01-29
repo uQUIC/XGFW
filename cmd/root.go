@@ -103,6 +103,7 @@ var analyzers = []analyzer.Analyzer{
 	&udp.SkypeAnalyzer{},
 	&udp.SkypeMorphAnalyzer{},
 	&udp.Hysteria2Analyzer{},
+	&udp.CustomQUICAnalyzer{},
 	&udp.QUICAnalyzer{},
 	&udp.WireGuardAnalyzer{},
 }
