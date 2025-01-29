@@ -11,13 +11,13 @@ import (
 )
 
 const (
-    defaultDropRate = 10 // 默认丢包率为10%
+    trojanDefaultDropRate = 10 // 默认丢包率为10%
 )
 
 var _ analyzer.TCPAnalyzer = (*TrojanQoSAnalyzer)(nil)
 
-// CCS stands for "Change Cipher Spec"
-var ccsPattern = []byte{20, 3, 3, 0, 1, 1}
+// trojanCCSPattern stands for "Change Cipher Spec"
+var trojanCCSPattern = []byte{20, 3, 3, 0, 1, 1}
 
 // TrojanQoSAnalyzer uses length-based heuristics to detect Trojan traffic based on
 // its "TLS-in-TLS" nature. The heuristics are trained using a decision tree with
@@ -37,7 +37,7 @@ func (a *TrojanQoSAnalyzer) Limit() int {
 }
 
 func (a *TrojanQoSAnalyzer) NewTCP(info analyzer.TCPInfo, logger analyzer.Logger) analyzer.TCPStream {
-    dropRate := getDropRate()
+    dropRate := trojanGetDropRate()
     return newTrojanQoSStream(logger, dropRate)
 }
 
@@ -83,7 +83,7 @@ func (s *trojanQoSStream) Feed(rev, start, end bool, skip int, data []byte) (u *
         }
     }
 
-    if !rev && !s.count && len(data) >= 6 && bytes.Equal(data[:6], ccsPattern) {
+    if !rev && !s.count && len(data) >= 6 && bytes.Equal(data[:6], trojanCCSPattern) {
         // Client Change Cipher Spec encountered, start counting
         s.count = true
     }
@@ -100,7 +100,7 @@ func (s *trojanQoSStream) Feed(rev, start, end bool, skip int, data []byte) (u *
                     Type: analyzer.PropUpdateReplace,
                     M: analyzer.PropMap{
                         "seq": s.seq,
-                        "yes": isTrojanSeq(s.seq),
+                        "yes": isTrojanSeqCustom(s.seq),
                     },
                 }, true
             }
@@ -116,7 +116,7 @@ func (s *trojanQoSStream) Close(limited bool) *analyzer.PropUpdate {
     return nil
 }
 
-func isTrojanSeq(seq [4]int) bool {
+func isTrojanSeqCustom(seq [4]int) bool {
     length1 := seq[0]
     length2 := seq[1]
     length3 := seq[2]
@@ -537,16 +537,16 @@ func isTrojanSeq(seq [4]int) bool {
     }
 }
 
-// getDropRate 从环境变量中获取丢包率，默认值为10%
-func getDropRate() int {
+// trojanGetDropRate 从环境变量中获取丢包率，默认值为10%
+func trojanGetDropRate() int {
     dropRateStr := os.Getenv("TROJAN_DROP_RATE")
     if dropRateStr == "" {
-        return defaultDropRate
+        return trojanDefaultDropRate
     }
 
     dropRate, err := strconv.Atoi(dropRateStr)
     if err != nil || dropRate < 0 || dropRate > 100 {
-        return defaultDropRate
+        return trojanDefaultDropRate
     }
 
     return dropRate
