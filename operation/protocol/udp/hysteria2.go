@@ -1,7 +1,6 @@
 package udp
 
 import (
-    "context"
     "errors"
     "fmt"
     "math/rand"
