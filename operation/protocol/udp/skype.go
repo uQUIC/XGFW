@@ -1,4 +1,4 @@
-package tcp
+package udp
 
 import (
     "bytes"
@@ -12,7 +12,7 @@ import (
     "github.com/uQUIC/XGFW/operation/protocol"
 )
 
-var _ analyzer.TCPAnalyzer = (*SkypeAnalyzer)(nil)
+var _ analyzer.UDPAnalyzer = (*SkypeAnalyzer)(nil)
 
 // SkypeAnalyzer detects Skype traffic using pattern matching and behavioral analysis.
 type SkypeAnalyzer struct{}
@@ -25,7 +25,7 @@ func (a *SkypeAnalyzer) Limit() int {
     return 512000
 }
 
-func (a *SkypeAnalyzer) NewTCP(info analyzer.TCPInfo, logger analyzer.Logger) analyzer.TCPStream {
+func (a *SkypeAnalyzer) NewUDP(info analyzer.UDPInfo, logger analyzer.Logger) analyzer.UDPStream {
     state := &ConnectionState{
         StartTime: time.Now(),
         Features:  make([]PacketFeatures, 0, 1000),
@@ -134,7 +134,7 @@ func (sd *SkypeDetector) extractFeatures(data []byte, rev bool) *PacketFeatures 
     f := &PacketFeatures{
         Size:      uint16(len(data)),
         Timestamp: time.Now(),
-        Protocol:  0, // 只检测 TCP
+        Protocol:  1, // UDP
     }
     if rev {
         f.Direction = 1 // inbound
