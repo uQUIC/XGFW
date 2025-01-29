@@ -1,4 +1,4 @@
-package qos-udp
+package qos_udp
 
 import (
     "math/rand"
