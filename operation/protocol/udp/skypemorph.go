@@ -3,7 +3,6 @@ package udp
 import (
     "bytes"
     "crypto/sha256"
-    "fmt"
     "log"
     "time"
 
@@ -55,10 +54,7 @@ func newSkypeMorphStream(logger analyzer.Logger) *skypeMorphStream {
     }
 }
 
-func (s *skypeMorphStream) Feed(rev, start, end bool, skip int, data []byte) (u *analyzer.PropUpdate, done bool) {
-    if skip != 0 {
-        return nil, true
-    }
+func (s *skypeMorphStream) Feed(rev bool, data []byte) (u *analyzer.PropUpdate, done bool) {
     if len(data) == 0 {
         return nil, false
     }
