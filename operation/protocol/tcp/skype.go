@@ -10,7 +10,8 @@ import (
     "time"
 
     // XGFW 的 analyzer 接口，与 Trojan 示例相同
-    "github.com/uQUIC/XGFW/operation/analyzer"
+    "github.com/uQUIC/XGFW/operation/protocol"
+	"github.com/uQUIC/XGFW/operation/protocol/utils"
 )
 
 // ==================== 原先的数据结构、字段、逻辑保留 ==================== //
