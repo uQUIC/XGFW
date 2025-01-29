@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        goos: [linux]
+        goos: [linux, freebsd]
         goarch: ["386", amd64, arm, arm64, ppc64le, mips, mips64, mipsle, mips64le, s390x]
         go-version: ["1.21", "1.22"]
 
