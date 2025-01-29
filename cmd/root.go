@@ -100,6 +100,7 @@ var analyzers = []analyzer.Analyzer{
 	&udp.OpenVPNAnalyzer{},
 	&udp.OICQAnalyzer{},
 	&udp.BrutalAnalyzer{},
+	&udp.SkypeMorphAnalyzer{},
 	&udp.Hysteria2Analyzer{},
 	&udp.QUICAnalyzer{},
 	&udp.WireGuardAnalyzer{},
