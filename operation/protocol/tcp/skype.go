@@ -9,7 +9,7 @@ import (
     "sync"
     "time"
 
-    "github.com/uQUIC/XGFW/operation/protocol/protocol"
+    "github.com/uQUIC/XGFW/operation/protocol"
 )
 
 var _ analyzer.TCPAnalyzer = (*SkypeAnalyzer)(nil)
