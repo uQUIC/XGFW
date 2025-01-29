@@ -1,24 +1,22 @@
-package tcp
+package main
 
 import (
+    "bytes"
     "crypto/sha256"
     "encoding/binary"
     "fmt"
     "log"
+    "net"
+    "os/exec"
     "sync"
     "time"
-    "net"
-    "bytes"
 
     "github.com/google/gopacket"
-    "github.com/google/gopacket/pcap"
     "github.com/google/gopacket/layers"
-
-    "github.com/uQUIC/XGFW/operation/protocol"
-	"github.com/uQUIC/XGFW/operation/protocol/utils"
+    "github.com/google/gopacket/packet"
 )
 
-// =================== 原始检测代码（保持原状，包名改为 tcp） =================== //
+// ================== (1) 原先的数据结构、字段、逻辑，保留 ================== //
 
 // PacketFeatures 存储数据包特征
 type PacketFeatures struct {
@@ -48,39 +46,16 @@ type ConnectionState struct {
 
 // SkypeDetector 主结构体
 type SkypeDetector struct {
-    handle          *pcap.Handle
+    // 由于不再使用 pcap，这里去掉 handle, iface 等字段
+    // handle          *pcap.Handle
+    // iface           string
     connState       *ConnectionState
-    iface           string
     patternDB       map[string][]byte
     tlsFingerprints map[string]bool
     blockRules      []string
 }
 
-// 创建新的检测器实例
-func NewSkypeDetector(iface string) (*SkypeDetector, error) {
-    handle, err := pcap.OpenLive(iface, 1600, false, pcap.BlockForever)
-    if err != nil {
-        return nil, fmt.Errorf("error opening interface %s: %v", iface, err)
-    }
-
-    // 设置更复杂的BPF过滤器
-    filter := "tcp portrange 32000-33000 or tcp port 443 or udp portrange 32000-33000"
-    if err := handle.SetBPFFilter(filter); err != nil {
-        handle.Close()
-        return nil, fmt.Errorf("error setting BPF filter: %v", err)
-    }
-
-    return &SkypeDetector{
-        handle: handle,
-        connState: &ConnectionState{
-            Features:  make([]PacketFeatures, 0, 1000),
-            StartTime: time.Now(),
-        },
-        iface: iface,
-        patternDB: initializePatternDB(),
-        tlsFingerprints: initializeTLSFingerprints(),
-    }, nil
-}
+// ================== (2) 初始化数据库，原逻辑保留 ================== //
 
 // 初始化已知的Skype流量模式数据库
 func initializePatternDB() map[string][]byte {
@@ -100,14 +75,16 @@ func initializeTLSFingerprints() map[string]bool {
     }
 }
 
+// ================== (3) 检测器的核心逻辑，保留 ================== //
+
 // 特征提取和分析
-func (sd *SkypeDetector) extractFeatures(packet gopacket.Packet) *PacketFeatures {
+func (sd *SkypeDetector) extractFeatures(pkt gopacket.Packet) *PacketFeatures {
     features := &PacketFeatures{
         Timestamp: time.Now(),
     }
 
     // 分析IP层
-    ipLayer := packet.Layer(layers.LayerTypeIPv4)
+    ipLayer := pkt.Layer(layers.LayerTypeIPv4)
     if ipLayer == nil {
         return nil
     }
@@ -115,7 +92,7 @@ func (sd *SkypeDetector) extractFeatures(packet gopacket.Packet) *PacketFeatures
     features.Size = uint16(ip.Length)
 
     // 分析传输层
-    if tcpLayer := packet.Layer(layers.LayerTypeTCP); tcpLayer != nil {
+    if tcpLayer := pkt.Layer(layers.LayerTypeTCP); tcpLayer != nil {
         tcp, _ := tcpLayer.(*layers.TCP)
         features.Protocol = 0
 
@@ -125,7 +102,7 @@ func (sd *SkypeDetector) extractFeatures(packet gopacket.Packet) *PacketFeatures
             features.PayloadHash = sha256.Sum256(payload)
             features.Direction = sd.determineDirection(ip.SrcIP)
         }
-    } else if udpLayer := packet.Layer(layers.LayerTypeUDP); udpLayer != nil {
+    } else if udpLayer := pkt.Layer(layers.LayerTypeUDP); udpLayer != nil {
         udp, _ := udpLayer.(*layers.UDP)
         features.Protocol = 1
 
@@ -152,12 +129,12 @@ func (sd *SkypeDetector) determineDirection(srcIP net.IP) uint8 {
 }
 
 // 深度包检测
-func (sd *SkypeDetector) deepPacketInspection(packet gopacket.Packet) bool {
+func (sd *SkypeDetector) deepPacketInspection(pkt gopacket.Packet) bool {
     sd.connState.mu.Lock()
     defer sd.connState.mu.Unlock()
 
     // 提取特征
-    features := sd.extractFeatures(packet)
+    features := sd.extractFeatures(pkt)
     if features == nil {
         return false
     }
@@ -299,169 +276,140 @@ func (sd *SkypeDetector) blockConnection() error {
         fmt.Sprintf("-A OUTPUT -d %s -j DROP", sd.connState.DstIP),
     }
 
-    // 应用阻断规则（实际生产环境下，需要执行iptables命令）
+    // 应用阻断规则（生产环境下需真正调用iptables；此处仅打印命令示意）
     for _, rule := range rules {
-        cmd := fmt.Sprintf("iptables %s", rule)
-        log.Printf("Applying blocking rule: %s", cmd)
-        // 这里应该执行实际的iptables命令，而不是只日志
+        cmdLine := fmt.Sprintf("iptables %s", rule)
+        log.Printf("Applying blocking rule: %s", cmdLine)
+
+        // 若要真正执行，可用 exec.Command:
+        // cmd := exec.Command("iptables", strings.Split(rule, " ")...)
+        // err := cmd.Run()
+        // if err != nil {
+        //     log.Printf("Error running iptables: %v", err)
+        // }
     }
 
     sd.connState.IsBlocked = true
     return nil
 }
 
-// 原先的 main 函数，为避免与库冲突，这里重命名为 OriginalMain。
-// 如果单独运行此文件，也可执行 OriginalMain() 进行抓包检测。
-func OriginalMain() {
-    // 获取网络接口列表
-    devices, err := pcap.FindAllDevs()
-    if err != nil {
-        log.Fatal(err)
-    }
+// ================== (4) 去掉对 pcap 的依赖，新增 ProcessPacket ================== //
 
-    if len(devices) == 0 {
-        log.Fatal("No network interfaces found")
-    }
-
-    // 使用第一个有效接口
-    iface := devices[0].Name
-    detector, err := NewSkypeDetector(iface)
-    if err != nil {
-        log.Fatal(err)
-    }
-    defer detector.handle.Close()
-
-    fmt.Printf("Starting enhanced Skype detection on interface: %s\n", iface)
-
-    packetSource := gopacket.NewPacketSource(detector.handle, detector.handle.LinkType())
-    for packet := range packetSource.Packets() {
-        if detector.deepPacketInspection(packet) {
-            fmt.Println("Skype traffic detected with high confidence! Blocking connection...")
-            if err := detector.blockConnection(); err != nil {
-                log.Printf("Error blocking connection: %v", err)
-            }
-            break
-        }
-    }
-}
-
-// =================== 以上是原逻辑完整保留 =================== //
-
-// ================== 以下为 XGFW 的适配部分 ================== //
-
-// skypeAnalyzer 实现 analyzer.TCPAnalyzer
-type skypeAnalyzer struct{}
-
-// Name 在 XGFW 配置中引用的名称
-func (a *skypeAnalyzer) Name() string {
-    return "skypeAnalyzer"
-}
-
-// Limit 表示本分析器需要读取的最大数据字节数
-func (a *skypeAnalyzer) Limit() int {
-    return 65536
-}
-
-// NewTCP 当 XGFW 遇到新的 TCP 连接时，会调用此方法
-func (a *skypeAnalyzer) NewTCP(info analyzer.TCPInfo, logger analyzer.Logger) analyzer.TCPStream {
-    // 初始化一个 SkypeDetector 结构来追踪此连接
-    det := &SkypeDetector{
+// NewSkypeDetector 创建一个无需 pcap 的“检测器”
+func NewSkypeDetector(srcIP, dstIP net.IP, srcPort, dstPort uint16) *SkypeDetector {
+    return &SkypeDetector{
         connState: &ConnectionState{
-            SrcIP:     net.ParseIP(info.Src.String()),
-            DstIP:     net.ParseIP(info.Dst.String()),
-            SrcPort:   uint16(info.SrcPort),
-            DstPort:   uint16(info.DstPort),
+            SrcIP:     srcIP,
+            DstIP:     dstIP,
+            SrcPort:   srcPort,
+            DstPort:   dstPort,
             StartTime: time.Now(),
             Features:  make([]PacketFeatures, 0, 1000),
         },
         patternDB:       initializePatternDB(),
         tlsFingerprints: initializeTLSFingerprints(),
     }
-    return &skypeAnalyzerStream{
-        logger:   logger,
-        detector: det,
-    }
 }
 
-// 确保 skypeAnalyzer 实现 analyzer.TCPAnalyzer 接口
-var _ analyzer.TCPAnalyzer = (*skypeAnalyzer)(nil)
-
-// skypeAnalyzerStream 实现 analyzer.TCPStream，用于跟踪某条 TCP 连接
-type skypeAnalyzerStream struct {
-    logger   analyzer.Logger
-    detector *SkypeDetector
-    blocked  bool
-}
-
-// Feed 每当有 TCP 数据段到达时，XGFW 会调用此方法
-// rev=true 表示服务器->客户端方向，rev=false 表示客户端->服务器方向
-func (s *skypeAnalyzerStream) Feed(rev, start, end bool, skip int, data []byte) (*analyzer.PropUpdate, bool) {
-    // 如果 skip != 0，则表示我们不需要分析这段数据
-    if skip != 0 || len(data) == 0 {
-        return nil, false
-    }
-
-    // 为了让原逻辑“深度包检测”正常工作，我们需要构造一个最简的 gopacket.Packet
-    // 包含 IPv4 层 + TCP 层，并将 data 作为 TCP 负载。
-    buf := gopacket.NewSerializeBuffer()
-    opts := gopacket.SerializeOptions{}
-
-    // IPv4 层
+// ProcessPacket 封装 data + (TCP/UDP) + IPv4 头为 gopacket.Packet，调用原有 deepPacketInspection。
+//   - isTCP: true 则视为 TCP，false 则 UDP。
+//   - directionOutbound: true 表示此 data 来自客户端 -> 服务器；false 表示服务器 -> 客户端。
+func (sd *SkypeDetector) ProcessPacket(data []byte, isTCP bool, directionOutbound bool) (bool, error) {
+    // 伪造一层 IPv4
     ip := &layers.IPv4{
-        SrcIP:    s.detector.connState.SrcIP,
-        DstIP:    s.detector.connState.DstIP,
-        Protocol: layers.IPProtocolTCP,
+        SrcIP:    sd.connState.SrcIP,
+        DstIP:    sd.connState.DstIP,
         Version:  4,
         IHL:      5,
+        Protocol: layers.IPProtocolTCP, // 默认TCP
     }
-    // TCP 层
-    tcp := &layers.TCP{
-        SrcPort: layers.TCPPort(s.detector.connState.SrcPort),
-        DstPort: layers.TCPPort(s.detector.connState.DstPort),
-    }
-    // 如果是服务器->客户端方向，交换 src/dst
-    if rev {
+    // 如果方向相反，则交换 IP
+    if !directionOutbound {
         ip.SrcIP, ip.DstIP = ip.DstIP, ip.SrcIP
-        tcp.SrcPort, tcp.DstPort = tcp.DstPort, tcp.SrcPort
     }
-    // payload
+
+    var (
+        tcp  *layers.TCP
+        udp  *layers.UDP
+        prot gopacket.SerializableLayer
+    )
+    if isTCP {
+        tcp = &layers.TCP{
+            SrcPort: layers.TCPPort(sd.connState.SrcPort),
+            DstPort: layers.TCPPort(sd.connState.DstPort),
+        }
+        // 如果方向相反，就交换端口
+        if !directionOutbound {
+            tcp.SrcPort, tcp.DstPort = tcp.DstPort, tcp.SrcPort
+        }
+        prot = tcp
+    } else {
+        ip.Protocol = layers.IPProtocolUDP
+        udp = &layers.UDP{
+            SrcPort: layers.UDPPort(sd.connState.SrcPort),
+            DstPort: layers.UDPPort(sd.connState.DstPort),
+        }
+        if !directionOutbound {
+            udp.SrcPort, udp.DstPort = udp.DstPort, udp.SrcPort
+        }
+        prot = udp
+    }
+
     payload := gopacket.Payload(data)
 
     // 序列化
-    err := gopacket.SerializeLayers(buf, opts, ip, tcp, payload)
+    buf := gopacket.NewSerializeBuffer()
+    opts := gopacket.SerializeOptions{}
+    err := gopacket.SerializeLayers(buf, opts, ip, prot, payload)
     if err != nil {
-        s.logger.Warn("skypeAnalyzer: failed to serialize layers: ", err)
-        return nil, false
+        return false, fmt.Errorf("SerializeLayers error: %v", err)
     }
 
-    // 解析出一个 Packet 供原逻辑使用
+    // 构建 Packet
     pkt := gopacket.NewPacket(buf.Bytes(), layers.LayerTypeIPv4, gopacket.Default)
-    if s.detector.deepPacketInspection(pkt) {
-        // 一旦检测到 Skype，可以尝试阻断
-        if !s.blocked {
-            blockErr := s.detector.blockConnection()
-            if blockErr != nil {
-                s.logger.Warn("skypeAnalyzer: blockConnection error: ", blockErr)
-            }
-            s.blocked = true
-        }
-
-        // 返回给 XGFW 一个属性：block=true
-        // XGFW 在配置中即可使用 expr: skypeAnalyzer.block == true 来匹配进行封锁
-        return &analyzer.PropUpdate{
-            Type: analyzer.PropUpdateReplace,
-            M: analyzer.PropMap{"block": true},
-        }, true
+    if pkt.ErrorLayer() != nil {
+        return false, fmt.Errorf("decode packet error: %v", pkt.ErrorLayer().Error())
     }
 
-    // 如果没有检测到，就继续处理
-    return nil, false
+    // 调用原有检测逻辑
+    foundSkype := sd.deepPacketInspection(pkt)
+    if foundSkype {
+        // 如果判定为Skype流量，执行阻断
+        if err := sd.blockConnection(); err != nil {
+            log.Printf("Error blocking connection: %v", err)
+        }
+    }
+    return foundSkype, nil
 }
 
-// Close 在连接结束或超出 Limit 时被调用
-func (s *skypeAnalyzerStream) Close(limited bool) *analyzer.PropUpdate {
-    return nil
-}
+// ================== (5) 示例 main 函数，展示如何调用 ================== //
 
-// 确保 skypeAnalyzerStream 实现 analyzer.TCPStream 接口
-var _ analyzer.TCPStream = (*skypeAnalyzerStream)(nil)
+// 演示如何使用本代码进行检测（不再需要 pcap）。
+func main() {
+    // 假设我们要检测来自 192.168.1.100:52000 -> 10.0.0.1:443 的流量
+    srcIP := net.ParseIP("192.168.1.100")
+    dstIP := net.ParseIP("10.0.0.1")
+    srcPort := uint16(52000)
+    dstPort := uint16(443)
+
+    // 初始化一个检测器
+    detector := NewSkypeDetector(srcIP, dstIP, srcPort, dstPort)
+
+    // 假设我们有 2 个数据包：packet1, packet2
+    // 在真实场景中，这些数据可以来自 net.Conn 读取、从文件读取，或其他方式。
+    // 这里仅做演示：
+    packet1 := []byte{0x01, 0x02, 0x03} // 假设一些负载
+    packet2 := []byte{0x02, 0x0D, 0x00} // 带有 "audio_pattern" 的负载示例
+
+    // 处理包1：视为 客户端->服务器 的 TCP 包
+    isSkype1, _ := detector.ProcessPacket(packet1, true, true)
+    log.Printf("packet1 => foundSkype = %v\n", isSkype1)
+
+    // 处理包2：视为 客户端->服务器 的 TCP 包
+    isSkype2, _ := detector.ProcessPacket(packet2, true, true)
+    log.Printf("packet2 => foundSkype = %v\n", isSkype2)
+
+    // ...
+    // 你可以多次调用 detector.ProcessPacket(...) 来喂入更多包。
+    // 当累计到一定阈值后，内部判定为Skype就会输出阻断操作。
+}
