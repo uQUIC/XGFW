@@ -334,12 +334,3 @@ func sendUDPRequest(ip string, port int, message []byte) (string, error) {
     }
     return string(buf[:n]), nil
 }
-
-func contains(slice []string, item string) bool {
-    for _, s := range slice {
-        if strings.TrimSpace(s) == strings.TrimSpace(item) {
-            return true
-        }
-    }
-    return false
-}
