@@ -5,7 +5,6 @@ import (
     "fmt"
     "math/rand"
     "net"
-    "strings"
     "sync"
     "time"
 
@@ -90,6 +89,14 @@ func (s *hysteria2Stream) Feed(rev bool, data []byte) (*analyzer.PropUpdate, boo
         }, true
     }
 
+    // --------------------------
+    // 1) 调用 QUIC 检测函数
+    // --------------------------
+    if !s.isQUIC(data) {
+        // 如果不是 QUIC 流量，直接返回
+        return nil, false
+    }
+
     // 统计包数和流量
     s.packetCount++
     s.totalBytes += len(data)
@@ -100,7 +107,7 @@ func (s *hysteria2Stream) Feed(rev bool, data []byte) (*analyzer.PropUpdate, boo
     }
 
     // --------------------------
-    // 1) 解析 QUIC ClientHello
+    // 2) 解析 QUIC ClientHello
     // --------------------------
     pl, err := quic.ReadCryptoPayload(data)
     if err != nil || len(pl) < 4 {
@@ -130,7 +137,7 @@ func (s *hysteria2Stream) Feed(rev bool, data []byte) (*analyzer.PropUpdate, boo
     }
 
     // --------------------------
-    // 2) 立即检查是否满足封锁条件
+    // 3) 立即检查是否满足封锁条件
     // --------------------------
     //   （和原代码不同：我们在此同步调用，而非goroutine）
     blockedNow := s.checkAndBlockIfNecessary()
@@ -146,12 +153,43 @@ func (s *hysteria2Stream) Feed(rev bool, data []byte) (*analyzer.PropUpdate, boo
     }
 
     // --------------------------
-    // 3) 如果还没 block，则把解析到的 ClientHello 内容合并上报
+    // 4) 如果还没 block，则把解析到的 ClientHello 内容合并上报
     // --------------------------
     return &analyzer.PropUpdate{
         Type: analyzer.PropUpdateMerge,
         M:    analyzer.PropMap{"req": m}, // 仅供其他规则或日志使用
     }, true
+}
+
+// isQUIC 检测流量是否为 QUIC 流量
+func (s *hysteria2Stream) isQUIC(data []byte) bool {
+    const quicInvalidCountThreshold = 4
+    invalidCount := 0
+
+    pl, err := quic.ReadCryptoPayload(data)
+    if err != nil || len(pl) < 4 {
+        invalidCount++
+        return invalidCount < quicInvalidCountThreshold
+    }
+
+    if pl[0] != internal.TypeClientHello {
+        invalidCount++
+        return invalidCount < quicInvalidCountThreshold
+    }
+
+    chLen := int(pl[1])<<16 | int(pl[2])<<8 | int(pl[3])
+    if chLen < minDataSize {
+        invalidCount++
+        return invalidCount < quicInvalidCountThreshold
+    }
+
+    m := internal.ParseTLSClientHelloMsgData(&utils.ByteBuffer{Buf: pl[4:]})
+    if m == nil {
+        invalidCount++
+        return invalidCount < quicInvalidCountThreshold
+    }
+
+    return true
 }
 
 // Close 在流结束时再返回统计信息或者已封锁信息
@@ -294,13 +332,4 @@ func sendUDPRequest(ip string, port int, message []byte) (string, error) {
         return "", err
     }
     return string(buf[:n]), nil
-}
-
-func contains(slice []string, item string) bool {
-    for _, s := range slice {
-        if strings.TrimSpace(s) == strings.TrimSpace(item) {
-            return true
-        }
-    }
-    return false
 }
