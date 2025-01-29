@@ -3,22 +3,26 @@ package tcp
 import (
     "bytes"
     "crypto/sha256"
+    "fmt"
+    "log"
+    "net"
+    "sync"
     "time"
+
+    "github.com/uQUIC/XGFW/operation/protocol/protocol"
 )
 
 var _ analyzer.TCPAnalyzer = (*SkypeAnalyzer)(nil)
 
 // Skype pattern signatures
-var (
-    headerPattern = []byte{0x02, 0x01, 0x47, 0x49}
-    keepAlive    = []byte{0x02, 0x00}
-    audioPattern = []byte{0x02, 0x0D}
-    videoPattern = []byte{0x02, 0x0E}
-)
+var skypePatterns = [][]byte{
+    {0x02, 0x01, 0x47, 0x49}, // header
+    {0x02, 0x00},             // keepalive
+    {0x02, 0x0D},             // audio
+    {0x02, 0x0E},             // video
+}
 
 // SkypeAnalyzer detects Skype traffic using pattern matching and behavioral analysis.
-// The detection is based on multiple factors including packet sizes, timing patterns,
-// and protocol signatures.
 type SkypeAnalyzer struct{}
 
 func (a *SkypeAnalyzer) Name() string {
@@ -30,37 +34,35 @@ func (a *SkypeAnalyzer) Limit() int {
 }
 
 func (a *SkypeAnalyzer) NewTCP(info analyzer.TCPInfo, logger analyzer.Logger) analyzer.TCPStream {
-    return newSkypeStream(logger)
-}
+    state := &ConnectionState{
+        StartTime: time.Now(),
+        Features:  make([]PacketFeatures, 0, 1000),
+        SrcPort:   uint16(info.SrcPort),
+        DstPort:   uint16(info.DstPort),
+        SrcIP:     net.ParseIP(info.SrcIP),
+        DstIP:     net.ParseIP(info.DstIP),
+    }
 
-type skypeStream struct {
-    logger      analyzer.Logger
-    features    []packetFeature
-    first       bool
-    count       bool
-    blocked     bool
-    bytesCount  uint64
-    packetCount uint32
-    lastSeen    time.Time
-}
+    det := &SkypeDetector{
+        connState:       state,
+        patternDB:       initializePatternDB(),
+        tlsFingerprints: initializeTLSFingerprints(),
+    }
 
-type packetFeature struct {
-    size      uint16
-    hash      [32]byte
-    timestamp time.Time
-    direction uint8 // 0: outbound, 1: inbound
-}
-
-func newSkypeStream(logger analyzer.Logger) *skypeStream {
     return &skypeStream{
         logger:   logger,
-        features: make([]packetFeature, 0, 1000),
-        first:    true,
-        lastSeen: time.Now(),
+        detector: det,
+        blocked:  false,
     }
 }
 
-func (s *skypeStream) Feed(rev, start, end bool, skip int, data []byte) (u *analyzer.PropUpdate, done bool) {
+type skypeStream struct {
+    logger   analyzer.Logger
+    detector *SkypeDetector
+    blocked  bool
+}
+
+func (s *skypeStream) Feed(rev, start, end bool, skip int, data []byte) (*analyzer.PropUpdate, bool) {
     if skip != 0 {
         return nil, true
     }
@@ -68,36 +70,21 @@ func (s *skypeStream) Feed(rev, start, end bool, skip int, data []byte) (u *anal
         return nil, false
     }
 
-    // Extract features
-    feature := packetFeature{
-        size:      uint16(len(data)),
-        timestamp: time.Now(),
-    }
-    if rev {
-        feature.direction = 1
-    }
-    if len(data) > 0 {
-        feature.hash = sha256.Sum256(data)
-    }
+    features := s.detector.extractFeatures(data, rev)
+    foundSkype := s.detector.deepPacketInspection(features)
 
-    // Update state
-    s.features = append(s.features, feature)
-    s.bytesCount += uint64(len(data))
-    s.packetCount++
-    s.lastSeen = feature.timestamp
-
-    // Analyze traffic
-    if s.shouldAnalyze() {
-        isSkype := s.analyzeTraffic()
-        if isSkype {
-            s.blocked = true
-            return &analyzer.PropUpdate{
-                Type: analyzer.PropUpdateReplace,
-                M: analyzer.PropMap{
-                    "yes": true,
-                },
-            }, true
+    if foundSkype && !s.blocked {
+        if err := s.detector.blockConnection(); err != nil {
+            s.logger.Log("ERROR", fmt.Sprintf("Skype blockConnection error: %v", err))
         }
+        s.blocked = true
+        return &analyzer.PropUpdate{
+            Type: analyzer.PropUpdateReplace,
+            M: analyzer.PropMap{
+                "yes":    true,
+                "result": "skype",
+            },
+        }, true
     }
 
     return nil, false
@@ -107,98 +94,194 @@ func (s *skypeStream) Close(limited bool) *analyzer.PropUpdate {
     return nil
 }
 
-func (s *skypeStream) shouldAnalyze() bool {
-    return len(s.features) >= 10 && s.packetCount > 20 && s.bytesCount > 1000
+type ConnectionState struct {
+    SrcIP            net.IP
+    DstIP            net.IP
+    SrcPort          uint16
+    DstPort          uint16
+    StartTime        time.Time
+    LastSeen         time.Time
+    PacketCount      uint32
+    BytesTransferred uint64
+    Features         []PacketFeatures
+    IsBlocked        bool
+    mu               sync.Mutex
 }
 
-func (s *skypeStream) analyzeTraffic() bool {
-    // 1. Size distribution analysis
+type PacketFeatures struct {
+    Size        uint16
+    PayloadHash [32]byte
+    Timestamp   time.Time
+    Direction   uint8 // 0: outbound, 1: inbound
+    Protocol    uint8 // 0: TCP, 1: UDP
+}
+
+type SkypeDetector struct {
+    connState       *ConnectionState
+    patternDB       map[string][]byte
+    tlsFingerprints map[string]bool
+}
+
+func initializePatternDB() map[string][]byte {
+    return map[string][]byte{
+        "header_pattern": {0x02, 0x01, 0x47, 0x49},
+        "keepalive":      {0x02, 0x00},
+        "audio_pattern":  {0x02, 0x0D},
+        "video_pattern":  {0x02, 0x0E},
+    }
+}
+
+func initializeTLSFingerprints() map[string]bool {
+    return map[string]bool{
+        "1603010200010001fc0303": true,
+        "1603010200010001fc0304": true,
+    }
+}
+
+func (sd *SkypeDetector) extractFeatures(data []byte, rev bool) *PacketFeatures {
+    f := &PacketFeatures{
+        Size:      uint16(len(data)),
+        Timestamp: time.Now(),
+        Protocol:  0, // 只检测 TCP
+    }
+    if rev {
+        f.Direction = 1 // inbound
+    }
+    if len(data) > 0 {
+        f.PayloadHash = sha256.Sum256(data)
+    }
+    return f
+}
+
+func (sd *SkypeDetector) deepPacketInspection(features *PacketFeatures) bool {
+    sd.connState.mu.Lock()
+    defer sd.connState.mu.Unlock()
+
+    sd.connState.PacketCount++
+    sd.connState.BytesTransferred += uint64(features.Size)
+    sd.connState.Features = append(sd.connState.Features, *features)
+    sd.connState.LastSeen = features.Timestamp
+
+    return sd.analyzeFeatures()
+}
+
+func (sd *SkypeDetector) analyzeFeatures() bool {
+    if len(sd.connState.Features) < 10 {
+        return false
+    }
+
     var smallPackets, mediumPackets, largePackets int
-    for _, f := range s.features {
+    for _, f := range sd.connState.Features {
         switch {
-        case f.size < 100:
+        case f.Size < 100:
             smallPackets++
-        case f.size < 500:
+        case f.Size < 500:
             mediumPackets++
         default:
             largePackets++
         }
     }
 
-    // 2. Pattern analysis
-    patterns := s.analyzePatterns()
+    patterns := sd.analyzeTrafficPatterns()
     if !patterns {
         return false
     }
 
-    // 3. Timing analysis
-    intervals := s.analyzeIntervals()
+    intervals := sd.analyzeTimeIntervals()
     if !intervals {
         return false
     }
 
-    // 4. Payload analysis
-    payloadMatch := s.analyzePayload()
+    payloadMatch := sd.analyzePayloadPatterns()
     if !payloadMatch {
         return false
     }
 
-    // Final scoring
-    score := 0
-    if float64(smallPackets)/float64(len(s.features)) > 0.6 {
-        score += 2
+    skypeScore := 0
+    if float64(smallPackets)/float64(len(sd.connState.Features)) > 0.6 {
+        skypeScore += 2
+    }
+    if sd.connState.PacketCount > 20 && sd.connState.BytesTransferred > 1000 {
+        skypeScore += 2
     }
     if patterns {
-        score += 3
+        skypeScore += 3
     }
     if intervals {
-        score += 2
+        skypeScore += 2
     }
     if payloadMatch {
-        score += 3
+        skypeScore += 3
     }
 
-    return score >= 8
+    return skypeScore >= 8
 }
 
-func (s *skypeStream) analyzePatterns() bool {
+func (sd *SkypeDetector) analyzeTrafficPatterns() bool {
+    if len(sd.connState.Features) < 10 {
+        return false
+    }
+
     var pattern uint16
-    startIdx := len(s.features) - 10
-    for i := startIdx; i < len(s.features); i++ {
-        pattern = (pattern << 1) | uint16(s.features[i].direction)
+    startIdx := len(sd.connState.Features) - 10
+    for i := startIdx; i < len(sd.connState.Features); i++ {
+        pattern = (pattern << 1) | uint16(sd.connState.Features[i].Direction)
     }
 
     return pattern&0x0F0F == 0x0505 || pattern&0x0F0F == 0x0A0A
 }
 
-func (s *skypeStream) analyzeIntervals() bool {
-    if len(s.features) < 3 {
+func (sd *SkypeDetector) analyzeTimeIntervals() bool {
+    if len(sd.connState.Features) < 3 {
         return false
     }
 
+    var intervals []time.Duration
+    for i := 1; i < len(sd.connState.Features); i++ {
+        interval := sd.connState.Features[i].Timestamp.Sub(sd.connState.Features[i-1].Timestamp)
+        intervals = append(intervals, interval)
+    }
+
     var heartbeatCount int
-    for i := 1; i < len(s.features); i++ {
-        interval := s.features[i].timestamp.Sub(s.features[i-1].timestamp)
+    for _, interval := range intervals {
         if interval >= 20*time.Millisecond && interval <= 30*time.Millisecond {
             heartbeatCount++
         }
     }
-
-    return heartbeatCount >= (len(s.features)-1)/3
+    return heartbeatCount >= len(intervals)/3
 }
 
-func (s *skypeStream) analyzePayload() bool {
+func (sd *SkypeDetector) analyzePayloadPatterns() bool {
     var matches int
-    patterns := [][]byte{headerPattern, keepAlive, audioPattern, videoPattern}
-
-    for _, f := range s.features {
-        for _, pattern := range patterns {
-            if bytes.Contains(f.hash[:], pattern) {
+    for _, feature := range sd.connState.Features {
+        for _, pattern := range sd.patternDB {
+            if bytes.Contains(feature.PayloadHash[:], pattern) {
                 matches++
                 break
             }
         }
     }
-
     return matches >= 3
+}
+
+func (sd *SkypeDetector) blockConnection() error {
+    sd.connState.mu.Lock()
+    defer sd.connState.mu.Unlock()
+
+    if sd.connState.IsBlocked {
+        return nil
+    }
+
+    rules := []string{
+        fmt.Sprintf("-A INPUT -s %s -j DROP", sd.connState.SrcIP),
+        fmt.Sprintf("-A OUTPUT -d %s -j DROP", sd.connState.DstIP),
+    }
+
+    for _, rule := range rules {
+        cmd := fmt.Sprintf("iptables %s", rule)
+        log.Printf("Applying blocking rule: %s", cmd)
+    }
+
+    sd.connState.IsBlocked = true
+    return nil
 }
