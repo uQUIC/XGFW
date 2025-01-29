@@ -95,6 +95,11 @@ func (s *brutalStream) Feed(rev bool, data []byte) (u *analyzer.PropUpdate, done
         }, true
     }
 
+    // 首先检测流量是否为QUIC流量
+    if !s.isQUIC(data) {
+        return nil, false
+    }
+
     // 以下是对服务器->客户端方向包、或加密数据完整性的检查
     // 如果是服务器方向的流量 (rev == true)，这里不做深入分析
     if rev {
@@ -148,6 +153,37 @@ func (s *brutalStream) Feed(rev bool, data []byte) (u *analyzer.PropUpdate, done
         Type: analyzer.PropUpdateMerge,
         M:    analyzer.PropMap{"req": m},
     }, true
+}
+
+// 检测流量是否为 QUIC 流量
+func (s *brutalStream) isQUIC(data []byte) bool {
+    const quicInvalidCountThreshold = 4
+    invalidCount := 0
+
+    pl, err := quic.ReadCryptoPayload(data)
+    if err != nil || len(pl) < 4 {
+        invalidCount++
+        return invalidCount < quicInvalidCountThreshold
+    }
+
+    if pl[0] != internal.TypeClientHello {
+        invalidCount++
+        return invalidCount < quicInvalidCountThreshold
+    }
+
+    chLen := int(pl[1])<<16 | int(pl[2])<<8 | int(pl[3])
+    if chLen < 41 {
+        invalidCount++
+        return invalidCount < quicInvalidCountThreshold
+    }
+
+    m := internal.ParseTLSClientHelloMsgData(&utils.ByteBuffer{Buf: pl[4:]})
+    if m == nil {
+        invalidCount++
+        return invalidCount < quicInvalidCountThreshold
+    }
+
+    return true
 }
 
 // updateIntervalStats 更新当前正在进行的区间的字节数
