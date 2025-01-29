@@ -9,7 +9,7 @@ import (
     "sync"
     "time"
 
-    "github.com/uQUIC/XGFW/operation/protocol"
+    "github.com/uQUIC/XGFW/operation/protocol/analyzer"
 )
 
 var _ analyzer.TCPAnalyzer = (*SkypeAnalyzer)(nil)
@@ -39,8 +39,8 @@ func (a *SkypeAnalyzer) NewTCP(info analyzer.TCPInfo, logger analyzer.Logger) an
         Features:  make([]PacketFeatures, 0, 1000),
         SrcPort:   uint16(info.SrcPort),
         DstPort:   uint16(info.DstPort),
-        SrcIP:     net.ParseIP(info.SrcIP),
-        DstIP:     net.ParseIP(info.DstIP),
+        SrcIP:     info.SrcIP, // Already net.IP type, no need to parse
+        DstIP:     info.DstIP, // Already net.IP type, no need to parse
     }
 
     det := &SkypeDetector{
@@ -75,7 +75,7 @@ func (s *skypeStream) Feed(rev, start, end bool, skip int, data []byte) (*analyz
 
     if foundSkype && !s.blocked {
         if err := s.detector.blockConnection(); err != nil {
-            s.logger.Log("ERROR", fmt.Sprintf("Skype blockConnection error: %v", err))
+            log.Printf("Skype blockConnection error: %v", err)
         }
         s.blocked = true
         return &analyzer.PropUpdate{
