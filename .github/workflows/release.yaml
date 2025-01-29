@@ -17,6 +17,8 @@ jobs:
         goarch: ["386", amd64, arm, arm64, ppc64le, mips, mips64, mipsle, mips64le, s390x]
         exclude:
           - goos: freebsd
+            goarch: amd64
+          - goos: freebsd
             goarch: ppc64le
           - goos: freebsd
             goarch: mips
