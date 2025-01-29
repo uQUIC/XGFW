@@ -13,23 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        goos: [linux, freebsd]
-        goarch: ["386", amd64, arm, arm64, ppc64le, mips, mips64, mipsle, mips64le, s390x]
-        exclude:
-          - goos: freebsd
-            goarch: amd64
-          - goos: freebsd
-            goarch: ppc64le
-          - goos: freebsd
-            goarch: mips
-          - goos: freebsd
-            goarch: mips64
-          - goos: freebsd
-            goarch: mipsle
-          - goos: freebsd
-            goarch: mips64le
-          - goos: freebsd
-            goarch: s390x
+        goos: [linux]
+        goarch: ["386", amd64, arm, arm64, ppc64le, mips, mips64, mipsle, mips64le, s390x, loongarch]
         go-version: ["1.21", "1.22"]
 
     steps:
