@@ -13,6 +13,11 @@ jobs:
     name: Static analysis
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    strategy:
+      matrix:
+        goos: [linux]
+        goarch: ["386", amd64, arm, arm64, ppc64le, mips, mips64, mipsle, mips64le, s390x]
+        go-version: ["1.21", "1.22"]
 
     steps:
       - name: Checkout repository
@@ -21,7 +26,12 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: 'stable'
+          go-version: ${{ matrix.go-version }}
+
+      - name: Set GOOS and GOARCH
+        run: |
+          echo "GOOS=${{ matrix.goos }}" >> $GITHUB_ENV
+          echo "GOARCH=${{ matrix.goarch }}" >> $GITHUB_ENV
 
       - run: go vet ./...
 
@@ -34,6 +44,11 @@ jobs:
     name: Tests
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    strategy:
+      matrix:
+        goos: [linux]
+        goarch: ["386", amd64, arm, arm64, ppc64le, mips, mips64, mipsle, mips64le, s390x]
+        go-version: ["1.21", "1.22"]
 
     steps:
       - name: Checkout repository
@@ -42,7 +57,12 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: 'stable'
+          go-version: ${{ matrix.go-version }}
+
+      - name: Set GOOS and GOARCH
+        run: |
+          echo "GOOS=${{ matrix.goos }}" >> $GITHUB_ENV
+          echo "GOARCH=${{ matrix.goarch }}" >> $GITHUB_ENV
 
       - run: go test ./...
       
@@ -54,6 +74,12 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goos: [linux]
+        goarch: ["386", amd64, arm, arm64, ppc64le, mips, mips64, mipsle, mips64le, s390x]
+        go-version: ["1.21", "1.22"]
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -61,7 +87,24 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: 'stable'
+          go-version: ${{ matrix.go-version }}
+
+      - name: Set GOOS and GOARCH
+        run: |
+          echo "GOOS=${{ matrix.goos }}" >> $GITHUB_ENV
+          echo "GOARCH=${{ matrix.goarch }}" >> $GITHUB_ENV
 
       - name: Build project
         run: go build ./...
+
+  notify:
+    name: Notify
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify Slack
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          fields: repo,commit
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
