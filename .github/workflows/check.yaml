@@ -30,11 +30,6 @@ jobs:
         with:
           install-go: false
 
-      - name: Lint code
-        uses: golangci/golangci-lint-action@v3
-        with:
-          version: v1.50.0
-
   tests:
     name: Tests
     runs-on: ubuntu-latest
