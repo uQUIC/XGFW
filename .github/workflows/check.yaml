@@ -30,6 +30,11 @@ jobs:
         with:
           install-go: false
 
+      - name: Lint code
+        uses: golangci/golangci-lint-action@v3
+        with:
+          version: v1.50.0
+
   tests:
     name: Tests
     runs-on: ubuntu-latest
@@ -45,3 +50,23 @@ jobs:
           go-version: 'stable'
 
       - run: go test ./...
+      
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          files: ./coverage.out
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+
+      - name: Build project
+        run: go build ./...
