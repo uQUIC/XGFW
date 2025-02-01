@@ -32,7 +32,7 @@ jobs:
           CGO_ENABLED: 0
         run: |
           mkdir -p build
-          go build -o build/OpenGFW-${GOOS}-${GOARCH}-go${{ matrix.go-version }} -ldflags "-s -w" .
+          go build -o build/XGFW-${GOOS}-${GOARCH}-go${{ matrix.go-version }} -ldflags "-s -w" .
 
       - name: Upload
         uses: softprops/action-gh-release@v2
