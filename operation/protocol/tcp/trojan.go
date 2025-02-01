@@ -5,7 +5,6 @@ import (
     "encoding/json"
     "fmt"
     "io/ioutil"
-    "net"
     "os"
     "path/filepath"
     "sync"
@@ -284,8 +283,8 @@ func (s *trojanStream) Feed(rev, start, end bool, skip int, data []byte) (u *ana
                 } else {
                     // Update statistics
                     if err := updateIPStats(dstIP, isTrojan); err != nil {
-                        // Use Error method instead of Log
-                        s.logger.Error(fmt.Sprintf("Failed to update IP stats: %v", err))
+                        // Use appropriate logger method
+                        s.logger.Warn(fmt.Sprintf("Failed to update IP stats: %v", err))
                     }
                 }
 
