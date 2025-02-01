@@ -2,54 +2,78 @@ package tcp
 
 import (
     "math/rand"
-    "os"
     "strconv"
+    "strings"
     "time"
 
     "github.com/uQUIC/XGFW/operation/protocol"
 )
 
-const (
-    defaultDropRateQos = 10 // 默认丢包率为10%
-)
+// FETQoSAnalyzer 实现带QoS的全加密流量分析器
+type FETQoSAnalyzer struct {
+    dropRate float64 // 丢包率 0.0-1.0
+}
 
-var _ analyzer.TCPAnalyzer = (*FETAnalyzerQos)(nil)
+// NewFETQoSAnalyzer 创建新的QoS分析器
+// expr格式: "drop_rate=X" 其中X为0-100的整数,表示丢包百分比
+func NewFETQoSAnalyzer(expr string) (*FETQoSAnalyzer, error) {
+    dropRate := 0.10 // 默认10%丢包率
+    
+    if expr != "" {
+        parts := strings.Split(expr, "=")
+        if len(parts) == 2 && parts[0] == "drop_rate" {
+            if rate, err := strconv.Atoi(parts[1]); err == nil {
+                if rate >= 0 && rate <= 100 {
+                    dropRate = float64(rate) / 100.0
+                }
+            }
+        }
+    }
 
-// FETAnalyzerQos stands for "Fully Encrypted Traffic QoS" analyzer.
-// It implements an algorithm to detect fully encrypted proxy protocols
-// such as Shadowsocks, mentioned in the following paper:
-// https://gfw.report/publications/usenixsecurity23/data/paper/paper.pdf
-type FETAnalyzerQos struct{}
+    return &FETQoSAnalyzer{
+        dropRate: dropRate,
+    }, nil
+}
 
-func (a *FETAnalyzerQos) Name() string {
+func (a *FETQoSAnalyzer) Name() string {
     return "fet-qos"
 }
 
-func (a *FETAnalyzerQos) Limit() int {
-    // We only really look at the first packet
-    return 8192
+func (a *FETQoSAnalyzer) Limit() int {
+    return 8192 // 保持与原FET分析器相同的限制
 }
 
-func (a *FETAnalyzerQos) NewTCP(info analyzer.TCPInfo, logger analyzer.Logger) analyzer.TCPStream {
-    dropRate := getDropRateQos()
-    return newFETStreamQos(logger, dropRate)
-}
-
-type fetStreamQos struct {
-    logger   analyzer.Logger
-    dropRate int    // 丢包率
-    rand     *rand.Rand
-}
-
-func newFETStreamQos(logger analyzer.Logger, dropRate int) *fetStreamQos {
-    return &fetStreamQos{
-        logger:   logger,
-        dropRate: dropRate,
-        rand:     rand.New(rand.NewSource(time.Now().UnixNano())),
+func (a *FETQoSAnalyzer) NewTCP(info analyzer.TCPInfo, logger analyzer.Logger) analyzer.TCPStream {
+    return &fetQoSStream{
+        logger:      logger,
+        dropRate:    a.dropRate,
+        rng:        rand.New(rand.NewSource(time.Now().UnixNano())),
+        fetDetector: newFETStream(logger), // 复用原有的FET检测逻辑
     }
 }
 
-func (s *fetStreamQos) Feed(rev, start, end bool, skip int, data []byte) (u *analyzer.PropUpdate, done bool) {
+type fetQoSStream struct {
+    logger      analyzer.Logger
+    dropRate    float64
+    rng         *rand.Rand
+    fetDetector *fetStream // 用于复用FET的检测逻辑
+    
+    packetCount  int
+    droppedCount int
+    totalBytes   int
+    isFET        bool    // 标记是否检测为全加密流量
+    
+    // 保存FET指标
+    metrics struct {
+        ex1 float32  // 平均popcount
+        ex2 bool     // 前6字节是否可打印
+        ex3 float32  // 可打印字符百分比
+        ex4 int      // 最长连续可打印序列长度
+        ex5 bool     // 是否为TLS/HTTP
+    }
+}
+
+func (s *fetQoSStream) Feed(rev, start, end bool, skip int, data []byte) (u *analyzer.PropUpdate, done bool) {
     if skip != 0 {
         return nil, true
     }
@@ -57,145 +81,87 @@ func (s *fetStreamQos) Feed(rev, start, end bool, skip int, data []byte) (u *ana
         return nil, false
     }
 
-    // 根据丢包率决定是否丢弃数据包
-    if s.rand.Float64()*100 < float64(s.dropRate) {
-        return nil, false
+    s.packetCount++
+    s.totalBytes += len(data)
+
+    // 使用原FET检测逻辑进行检测
+    update, fetDone := s.fetDetector.Feed(rev, start, end, skip, data)
+    
+    if update != nil {
+        // 保存FET指标
+        if ex1, ok := update.M["ex1"].(float32); ok {
+            s.metrics.ex1 = ex1
+        }
+        if ex2, ok := update.M["ex2"].(bool); ok {
+            s.metrics.ex2 = ex2
+        }
+        if ex3, ok := update.M["ex3"].(float32); ok {
+            s.metrics.ex3 = ex3
+        }
+        if ex4, ok := update.M["ex4"].(int); ok {
+            s.metrics.ex4 = ex4
+        }
+        if ex5, ok := update.M["ex5"].(bool); ok {
+            s.metrics.ex5 = ex5
+        }
+        // 判断是否为全加密流量
+        if yes, ok := update.M["yes"].(bool); ok && yes {
+            s.isFET = true
+        }
     }
 
-    ex1 := averagePopCountQos(data)
-    ex2 := isFirstSixPrintableQos(data)
-    ex3 := printablePercentageQos(data)
-    ex4 := contiguousPrintableQos(data)
-    ex5 := isTLSorHTTPQos(data)
-    exempt := (ex1 <= 3.4 || ex1 >= 4.6) || ex2 || ex3 > 0.5 || ex4 > 20 || ex5
+    // 如果确认是全加密流量，执行QoS丢包
+    if s.isFET {
+        // 根据配置的丢包率随机丢包
+        if s.rng.Float64() < s.dropRate {
+            s.droppedCount++
+            return &analyzer.PropUpdate{
+                Type: analyzer.PropUpdateMerge,
+                M: analyzer.PropMap{
+                    "drop":     true,
+                    "reason":   "fet-qos",
+                    "is_fet":   true,
+                },
+            }, false
+        }
+    }
+
+    // 如果FET检测完成，返回最终结果
+    if fetDone {
+        return &analyzer.PropUpdate{
+            Type: analyzer.PropUpdateReplace,
+            M: analyzer.PropMap{
+                "is_fet":      s.isFET,
+                "ex1":         s.metrics.ex1,
+                "ex2":         s.metrics.ex2,
+                "ex3":         s.metrics.ex3,
+                "ex4":         s.metrics.ex4,
+                "ex5":         s.metrics.ex5,
+                "packetCount": s.packetCount,
+                "totalBytes":  s.totalBytes,
+                "droppedCount": s.droppedCount,
+                "dropRate":    s.dropRate,
+            },
+        }, true
+    }
+
+    return nil, false
+}
+
+func (s *fetQoSStream) Close(limited bool) *analyzer.PropUpdate {
     return &analyzer.PropUpdate{
         Type: analyzer.PropUpdateReplace,
         M: analyzer.PropMap{
-            "ex1": ex1,
-            "ex2": ex2,
-            "ex3": ex3,
-            "ex4": ex4,
-            "ex5": ex5,
-            "yes": !exempt,
+            "is_fet":      s.isFET,
+            "ex1":         s.metrics.ex1,
+            "ex2":         s.metrics.ex2,
+            "ex3":         s.metrics.ex3,
+            "ex4":         s.metrics.ex4,
+            "ex5":         s.metrics.ex5,
+            "packetCount": s.packetCount,
+            "totalBytes":  s.totalBytes,
+            "droppedCount": s.droppedCount,
+            "dropRate":    s.dropRate,
         },
-    }, true
-}
-
-func (s *fetStreamQos) Close(limited bool) *analyzer.PropUpdate {
-    return nil
-}
-
-func popCountQos(b byte) int {
-    count := 0
-    for b != 0 {
-        count += int(b & 1)
-        b >>= 1
     }
-    return count
-}
-
-// averagePopCountQos returns the average popcount of the given bytes.
-// This is the "Ex1" metric in the paper.
-func averagePopCountQos(bytes []byte) float32 {
-    if len(bytes) == 0 {
-        return 0
-    }
-    total := 0
-    for _, b := range bytes {
-        total += popCountQos(b)
-    }
-    return float32(total) / float32(len(bytes))
-}
-
-// isFirstSixPrintableQos returns true if the first six bytes are printable ASCII.
-// This is the "Ex2" metric in the paper.
-func isFirstSixPrintableQos(bytes []byte) bool {
-    if len(bytes) < 6 {
-        return false
-    }
-    for i := range bytes[:6] {
-        if !isPrintableQos(bytes[i]) {
-            return false
-        }
-    }
-    return true
-}
-
-// printablePercentageQos returns the percentage of printable ASCII bytes.
-// This is the "Ex3" metric in the paper.
-func printablePercentageQos(bytes []byte) float32 {
-    if len(bytes) == 0 {
-        return 0
-    }
-    count := 0
-    for i := range bytes {
-        if isPrintableQos(bytes[i]) {
-            count++
-        }
-    }
-    return float32(count) / float32(len(bytes))
-}
-
-// contiguousPrintableQos returns the length of the longest contiguous sequence of
-// printable ASCII bytes.
-// This is the "Ex4" metric in the paper.
-func contiguousPrintableQos(bytes []byte) int {
-    if len(bytes) == 0 {
-        return 0
-    }
-    maxCount := 0
-    current := 0
-    for i := range bytes {
-        if isPrintableQos(bytes[i]) {
-            current++
-        } else {
-            if current > maxCount {
-                maxCount = current
-            }
-            current = 0
-        }
-    }
-    if current > maxCount {
-        maxCount = current
-    }
-    return maxCount
-}
-
-// isTLSorHTTPQos returns true if the given bytes look like TLS or HTTP.
-// This is the "Ex5" metric in the paper.
-func isTLSorHTTPQos(bytes []byte) bool {
-    if len(bytes) < 3 {
-        return false
-    }
-    // "We observe that the GFW exempts any connection whose first
-    // three bytes match the following regular expression:
-    // [\x16-\x17]\x03[\x00-\x09]" - from the paper in Section 4.3
-    if bytes[0] >= 0x16 && bytes[0] <= 0x17 &&
-        bytes[1] == 0x03 && bytes[2] <= 0x09 {
-        return true
-    }
-    // HTTP request
-    str := string(bytes[:3])
-    return str == "GET" || str == "HEA" || str == "POS" ||
-        str == "PUT" || str == "DEL" || str == "CON" ||
-        str == "OPT" || str == "TRA" || str == "PAT"
-}
-
-func isPrintableQos(b byte) bool {
-    return b >= 0x20 && b <= 0x7e
-}
-
-// getDropRateQos 从环境变量中获取丢包率，默认值为10%
-func getDropRateQos() int {
-    dropRateStr := os.Getenv("FET_DROP_RATE")
-    if dropRateStr == "" {
-        return defaultDropRateQos
-    }
-
-    dropRate, err := strconv.Atoi(dropRateStr)
-    if err != nil || dropRate < 0 || dropRate > 100 {
-        return defaultDropRateQos
-    }
-
-    return dropRate
 }
