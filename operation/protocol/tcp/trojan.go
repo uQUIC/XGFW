@@ -238,6 +238,7 @@ type trojanStream struct {
     seqIndex int
 }
 
+// NewTCP creates a new TCP stream analyzer
 func (a *TrojanAnalyzer) NewTCP(info analyzer.TCPInfo, logger analyzer.Logger) analyzer.TCPStream {
     return &trojanStream{
         logger: logger,
@@ -283,7 +284,8 @@ func (s *trojanStream) Feed(rev, start, end bool, skip int, data []byte) (u *ana
                 } else {
                     // Update statistics
                     if err := updateIPStats(dstIP, isTrojan); err != nil {
-                        s.logger.Log(fmt.Sprintf("Failed to update IP stats: %v", err))
+                        // Use Error method instead of Log
+                        s.logger.Error(fmt.Sprintf("Failed to update IP stats: %v", err))
                     }
                 }
 
@@ -307,7 +309,6 @@ func (s *trojanStream) Close(limited bool) *analyzer.PropUpdate {
     return nil
 }
 
-// Original isTrojanSeq function remains unchanged
 func isTrojanSeq(seq [4]int) bool {
 	length1 := seq[0]
 	length2 := seq[1]
