@@ -89,7 +89,7 @@ func initTrojanStats() error {
 
     // Load existing results
     resultPath := filepath.Join(BasePath, ResultFile)
-    if data, err := ioutil.ReadFile(resultPath); err == nil {
+    if data, err := os.ReadFile(resultPath); err == nil {
         if err := json.Unmarshal(data, &results.IPList); err != nil {
             return fmt.Errorf("failed to unmarshal results: %w", err)
         }
@@ -97,7 +97,7 @@ func initTrojanStats() error {
 
     // Load blocked IPs
     blockPath := filepath.Join(BasePath, BlockFile)
-    if data, err := ioutil.ReadFile(blockPath); err == nil {
+    if data, err := os.ReadFile(blockPath); err == nil {
         var blockedList []string
         if err := json.Unmarshal(data, &blockedList); err != nil {
             return fmt.Errorf("failed to unmarshal blocked IPs: %w", err)
@@ -170,7 +170,7 @@ func addToBlockList(ip string) error {
     var blockedList []string
 
     // Read existing block list
-    if data, err := ioutil.ReadFile(blockPath); err == nil {
+    if data, err := os.ReadFile(blockPath); err == nil {
         if err := json.Unmarshal(data, &blockedList); err != nil {
             return fmt.Errorf("failed to unmarshal blocked IPs: %w", err)
         }
@@ -187,7 +187,7 @@ func addToBlockList(ip string) error {
         return fmt.Errorf("failed to marshal blocked IPs: %w", err)
     }
 
-    if err := ioutil.WriteFile(blockPath, data, 0644); err != nil {
+    if err := os.WriteFile(blockPath, data, 0644); err != nil {
         return fmt.Errorf("failed to write block file: %w", err)
     }
 
@@ -202,7 +202,7 @@ func saveResults() error {
     }
 
     resultPath := filepath.Join(BasePath, ResultFile)
-    if err := ioutil.WriteFile(resultPath, data, 0644); err != nil {
+    if err := os.WriteFile(resultPath, data, 0644); err != nil {
         return fmt.Errorf("failed to write results file: %w", err)
     }
 
