@@ -284,7 +284,7 @@ func (s *trojanStream) Feed(rev, start, end bool, skip int, data []byte) (u *ana
                     // Update statistics
                     if err := updateIPStats(dstIP, isTrojan); err != nil {
                         // Use appropriate logger method
-                        s.logger.Info(fmt.Sprintf("Failed to update IP stats: %v", err))
+                        s.logger.Errorf("Failed to update IP stats: %v", err)
                     }
                 }
 
