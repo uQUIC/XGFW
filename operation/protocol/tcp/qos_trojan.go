@@ -1,7 +1,6 @@
 package tcp
 
 import (
-    "bytes"
     "math/rand"
     "strconv"
     "strings"
