@@ -7,9 +7,6 @@ import (
     "time"
 
     "github.com/uQUIC/XGFW/operation/protocol"
-    "github.com/uQUIC/XGFW/operation/protocol/internal"
-    "github.com/uQUIC/XGFW/operation/protocol/udp/internal/quic"
-    "github.com/uQUIC/XGFW/operation/protocol/utils"
 )
 
 // QUICQoSAnalyzer 实现带QoS的QUIC分析器
