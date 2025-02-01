@@ -97,7 +97,6 @@ var analyzers = []analyzer.Analyzer{
 	&tcp.TorAnalyzer{},
 	&tcp.TorQoSAnalyzer{},
 	&tcp.TrojanAnalyzer{},
-	&tcp.TrojanQoSAnalyzer{},
 	&tcp.TrojanClassicAnalyzer{},
 	&udp.DNSAnalyzer{},
 	&udp.OpenVPNAnalyzer{},
