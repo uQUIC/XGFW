@@ -7,25 +7,29 @@ import (
     "os"
     "path/filepath"
     "sync"
+    "sync/atomic"
     "time"
 
-    "github.com/uQUIC/XGFW/operation/protocol"
+    "github.com/apernet/OpenGFW/analyzer"
 )
 
 var _ analyzer.TCPAnalyzer = (*TrojanAnalyzer)(nil)
 
 // Configuration constants that can be set via expr
 var (
-    PositiveScore   = 2  // Score increase for positive detection
-    NegativeScore   = 1  // Score decrease for negative detection
-    BlockThreshold  = 20 // Threshold for blocking
+    PositiveScore    = 2      // Score increase for positive detection
+    NegativeScore    = 1      // Score decrease for negative detection
+    BlockThreshold   = 20     // Threshold for blocking based on score
+    PositiveThreshold = 0.33   // Threshold for positive rate for blocking
+    BlockDuration    = 24 * time.Hour // Block duration (temporary)
+    TimeWindow       = 1 * time.Hour // Time window for positive rate calculation
 )
 
 // Fixed configuration
 const (
     ResultFile = "trojan_result.json"
     BlockFile  = "trojan_block.json"
-    BasePath   = "/var/log/xgfw" // Base path for log files
+    BasePath   = "/var/log/opengfw" // Base path for log files
 )
 
 // CCS stands for "Change Cipher Spec"
@@ -33,24 +37,33 @@ var ccsPattern = []byte{20, 3, 3, 0, 1, 1}
 
 // IPStats represents the statistics for a single IP
 type IPStats struct {
-    IP        string    `json:"ip"`
-    Score     int       `json:"score"`
-    FirstSeen time.Time `json:"first_seen"`
-    LastSeen  time.Time `json:"last_seen"`
+    IP          string    `json:"ip"`
+    Score       int32     `json:"score"` // Use int32 for atomic operations
+    FirstSeen   time.Time `json:"first_seen"`
+    LastSeen    time.Time `json:"last_seen"`
+    Total       int       `json:"total"`    // Total requests (positive + negative)
+    Positive    int       `json:"positive"` // Positive counts
+    EventWindow []time.Time `json:"event_window"` // Time window for event history
 }
 
-// TrojanResults holds all IP statistics
+// BlockedIP stores information for blocked IPs
+type BlockedIP struct {
+    IP        string    `json:"ip"`
+    BlockTime time.Time `json:"block_time"`
+    Duration  time.Duration `json:"duration"` // Block duration
+}
+
 type TrojanResults struct {
     IPList []IPStats `json:"ip_list"`
     mu     sync.Mutex
 }
 
-// Global variables
 var (
     results     *TrojanResults
-    blockedIPs  map[string]struct{}
+    blockedIPs  map[string]*BlockedIP
     resultMutex sync.RWMutex
     initialized bool
+    saveChan    chan struct{} // Channel for file saving
 )
 
 // TrojanAnalyzer implements the TCP analyzer interface
@@ -69,6 +82,7 @@ func initTrojanStats() error {
     if initialized {
         return nil
     }
+
     resultMutex.Lock()
     defer resultMutex.Unlock()
 
@@ -84,7 +98,7 @@ func initTrojanStats() error {
     results = &TrojanResults{
         IPList: make([]IPStats, 0),
     }
-    blockedIPs = make(map[string]struct{})
+    blockedIPs = make(map[string]*BlockedIP)
 
     // Load existing results
     resultPath := filepath.Join(BasePath, ResultFile)
@@ -97,12 +111,8 @@ func initTrojanStats() error {
     // Load blocked IPs
     blockPath := filepath.Join(BasePath, BlockFile)
     if data, err := os.ReadFile(blockPath); err == nil {
-        var blockedList []string
-        if err := json.Unmarshal(data, &blockedList); err != nil {
+        if err := json.Unmarshal(data, &blockedIPs); err != nil {
             return fmt.Errorf("failed to unmarshal blocked IPs: %w", err)
-        }
-        for _, ip := range blockedList {
-            blockedIPs[ip] = struct{}{}
         }
     }
 
@@ -110,7 +120,7 @@ func initTrojanStats() error {
     return nil
 }
 
-// Update IP statistics
+// Update IP stats based on detection result
 func updateIPStats(ip string, isPositive bool) error {
     if err := initTrojanStats(); err != nil {
         return err
@@ -120,77 +130,91 @@ func updateIPStats(ip string, isPositive bool) error {
     defer results.mu.Unlock()
 
     // Check if IP is already blocked
-    if _, blocked := blockedIPs[ip]; blocked {
+    if blockedIP, exists := blockedIPs[ip]; exists && time.Since(blockedIP.BlockTime) < blockedIP.Duration {
+        // IP is temporarily blocked, skip processing
         return nil
     }
 
-    now := time.Now()
     var found bool
+    now := time.Now()
 
-    // Update existing IP stats
+    // Update or add new IP stats
     for i := range results.IPList {
         if results.IPList[i].IP == ip {
+            // Update positive/negative counts
+            if isPositive {
+                results.IPList[i].Positive++
+            }
+            results.IPList[i].Total++
+
+            // Update score based on result
             if isPositive {
                 results.IPList[i].Score += PositiveScore
             } else {
                 results.IPList[i].Score = max(0, results.IPList[i].Score-NegativeScore)
             }
             results.IPList[i].LastSeen = now
-            found = true
 
-            // Check if score exceeds threshold
-            if results.IPList[i].Score >= BlockThreshold {
-                if err := addToBlockList(ip); err != nil {
-                    return fmt.Errorf("failed to add IP to block list: %w", err)
-                }
+            // Track event for positive rate calculation
+            results.IPList[i].EventWindow = append(results.IPList[i].EventWindow, now)
+
+            // Check if score exceeds threshold or positive rate exceeds the threshold
+            if results.IPList[i].Score >= BlockThreshold || float64(results.IPList[i].Positive)/float64(results.IPList[i].Total) > PositiveThreshold {
+                go blockIP(ip, now)
             }
+            found = true
             break
         }
     }
 
-    // Add new IP if not found
-    if !found && isPositive {
-        results.IPList = append(results.IPList, IPStats{
+    // Add new IP stats if not found
+    if !found {
+        newStats := IPStats{
             IP:        ip,
-            Score:     PositiveScore,
             FirstSeen: now,
             LastSeen:  now,
-        })
+            Total:     1,
+            Positive:  boolToInt(isPositive),
+            EventWindow: []time.Time{now},
+        }
+        if isPositive {
+            newStats.Score = PositiveScore
+        }
+        results.IPList = append(results.IPList, newStats)
     }
 
-    return saveResults()
+    // Asynchronously save results
+    saveChan <- struct{}{}
+    return nil
 }
 
-// Add IP to block list
-func addToBlockList(ip string) error {
-    blockedIPs[ip] = struct{}{}
-
-    blockPath := filepath.Join(BasePath, BlockFile)
-    var blockedList []string
-
-    // Read existing block list
-    if data, err := os.ReadFile(blockPath); err == nil {
-        if err := json.Unmarshal(data, &blockedList); err != nil {
-            return fmt.Errorf("failed to unmarshal blocked IPs: %w", err)
-        }
-    }
-
-    // Add new IP if not already in list
-    if !contains(blockedList, ip) {
-        blockedList = append(blockedList, ip)
+// Block IP based on score or event frequency
+func blockIP(ip string, blockTime time.Time) {
+    blockedIPs[ip] = &BlockedIP{
+        IP:        ip,
+        BlockTime: blockTime,
+        Duration:  BlockDuration,
     }
 
     // Save updated block list
-    data, err := json.MarshalIndent(blockedList, "", "  ")
+    saveBlockedIPs()
+}
+
+// Save blocked IPs to file
+func saveBlockedIPs() {
+    resultMutex.RLock()
+    defer resultMutex.RUnlock()
+
+    blockPath := filepath.Join(BasePath, BlockFile)
+    data, err := json.MarshalIndent(blockedIPs, "", "  ")
     if err != nil {
-        return fmt.Errorf("failed to marshal blocked IPs: %w", err)
+        fmt.Printf("Failed to marshal blocked IPs: %v\n", err)
+        return
     }
 
     if err := os.WriteFile(blockPath, data, 0644); err != nil {
-        return fmt.Errorf("failed to write block file: %w", err)
+        fmt.Printf("Failed to write blocked IPs file: %v\n", err)
     }
-
-    return nil
 }
 
 // Save results to file
@@ -209,13 +233,11 @@ func saveResults() error {
 }
 
 // Helper functions
-func contains(slice []string, item string) bool {
-    for _, s := range slice {
-        if s == item {
-            return true
-        }
+func boolToInt(b bool) int {
+    if b {
+        return 1
     }
-    return false
+    return 0
 }
 
 func max(a, b int) int {
@@ -223,6 +245,26 @@ func max(a, b int) int {
         return a
     }
     return b
+}
+
+// Check if IP is blocked
+func isIPBlocked(ip string) bool {
+    if blockedIP, exists := blockedIPs[ip]; exists && time.Since(blockedIP.BlockTime) < blockedIP.Duration {
+        return true
+    }
+    return false
+}
+
+// Cleanup event window: remove old events that are outside the time window
+func cleanupEventWindow(ipStats *IPStats) {
+    now := time.Now()
+    var newWindow []time.Time
+    for _, eventTime := range ipStats.EventWindow {
+        if now.Sub(eventTime) <= TimeWindow {
+            newWindow = append(newWindow, eventTime)
+        }
+    }
+    ipStats.EventWindow = newWindow
 }
 
 // trojanStream represents a TCP stream being analyzed
@@ -282,7 +324,6 @@ func (s *trojanStream) Feed(rev, start, end bool, skip int, data []byte) (u *ana
                 } else {
                     // Update statistics
                     if err := updateIPStats(dstIP, isTrojan); err != nil {
-                        // Use appropriate logger method
                         s.logger.Errorf("Failed to update IP stats: %v", err)
                     }
                 }
