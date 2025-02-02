@@ -28,7 +28,7 @@ var (
 const (
     ResultFile = "trojan_result.json"
     BlockFile  = "trojan_block.json"
-    BasePath   = "/var/log/opengfw" // Base path for log files
+    BasePath   = "/var/log/xgfw" // Base path for log files
 )
 
 // CCS stands for "Change Cipher Spec"
