@@ -7,7 +7,6 @@ import (
     "os"
     "path/filepath"
     "sync"
-    "sync/atomic"
     "time"
 
     "github.com/uQUIC/XGFW/operation/protocol"
@@ -17,19 +16,19 @@ var _ analyzer.TCPAnalyzer = (*TrojanAnalyzer)(nil)
 
 // Configuration constants that can be set via expr
 var (
-    PositiveScore    = 2      // Score increase for positive detection
-    NegativeScore    = 1      // Score decrease for negative detection
-    BlockThreshold   = 20     // Threshold for blocking based on score
+    PositiveScore   int32 = 2  // Score increase for positive detection (use int32)
+    NegativeScore   int32 = 1  // Score decrease for negative detection (use int32)
+    BlockThreshold  int32 = 20 // Threshold for blocking (use int32)
     PositiveThreshold = 0.33   // Threshold for positive rate for blocking
-    BlockDuration    = 24 * time.Hour // Block duration (temporary)
-    TimeWindow       = 1 * time.Hour // Time window for positive rate calculation
+    BlockDuration   = 24 * time.Hour // Block duration (temporary)
+    TimeWindow      = 1 * time.Hour // Time window for positive rate calculation
 )
 
 // Fixed configuration
 const (
     ResultFile = "trojan_result.json"
     BlockFile  = "trojan_block.json"
-    BasePath   = "/var/log/xgfw" // Base path for log files
+    BasePath   = "/var/log/opengfw" // Base path for log files
 )
 
 // CCS stands for "Change Cipher Spec"
@@ -240,7 +239,7 @@ func boolToInt(b bool) int {
     return 0
 }
 
-func max(a, b int) int {
+func max(a, b int32) int32 {
     if a > b {
         return a
     }
