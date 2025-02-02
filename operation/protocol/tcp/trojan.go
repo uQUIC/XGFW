@@ -10,7 +10,7 @@ import (
     "sync/atomic"
     "time"
 
-    "github.com/apernet/OpenGFW/analyzer"
+    "github.com/uQUIC/XGFW/operation/protocol"
 )
 
 var _ analyzer.TCPAnalyzer = (*TrojanAnalyzer)(nil)
@@ -29,7 +29,7 @@ var (
 const (
     ResultFile = "trojan_result.json"
     BlockFile  = "trojan_block.json"
-    BasePath   = "/var/log/opengfw" // Base path for log files
+    BasePath   = "/var/log/xgfw" // Base path for log files
 )
 
 // CCS stands for "Change Cipher Spec"
