@@ -1,6 +1,7 @@
 package tcp
 
 import (
+    "bytes"
     "encoding/binary"
     "fmt"
     "time"
@@ -8,8 +9,19 @@ import (
     "github.com/uQUIC/XGFW/operation/protocol"
 )
 
-// XTLS 检测相关的常量定义
+var _ analyzer.TCPAnalyzer = (*XTLSAnalyzer)(nil)
+
+// CCS stands for "Change Cipher Spec"
+var trojanClassicCCS = []byte{20, 3, 3, 0, 1, 1}
+
 const (
+    trojanClassicUpLB    = 650
+    trojanClassicUpUB    = 1000
+    trojanClassicDownLB1 = 170
+    trojanClassicDownUB1 = 180
+    trojanClassicDownLB2 = 3000
+    trojanClassicDownUB2 = 7500
+
     // TLS record types
     recordTypeHandshake     = 22
     recordTypeAlert         = 21
@@ -31,62 +43,45 @@ const (
     minTLS13RecordSize  = 31
     maxTLS13RecordSize  = 65535
     rttThreshold        = 10 * time.Millisecond
-    
+
     // Scoring system
     alertPatternScore   = 5
     rttDiffScore        = 3
     versionMismatchScore = 4
     nonceExposureScore  = 3
 
-    // Define the missing constant
     XTLSBlockThreshold  = 10  // Example value, adjust as necessary
 )
 
-// XTLSDetectionStats 存储单个连接的检测统计
-type XTLSDetectionStats struct {
-    // Alert pattern detection
-    AlertPatternFound    bool
-    AlertRecordCount     int
-    LastAlertSize        int
-    AlertTimings         []time.Duration
+// XTLSAnalyzer uses a very simple packet length based check to determine
+// if a TLS connection is actually the Trojan proxy protocol.
+// The algorithm is from the following project, with small modifications:
+// https://github.com/XTLS/Trojan-killer
+// Warning: Experimental only. This method is known to have significant false positives and false negatives.
+type XTLSAnalyzer struct{}
 
-    // RTT analysis
-    UpstreamRTTs         []time.Duration
-    LocalRTTs            []time.Duration
-    RTTDifferential      float64
-
-    // Version detection
-    TLSVersion           uint16
-    VersionMismatch      bool
-    
-    // Nonce exposure (TLS 1.2)
-    NonceExposed         bool
-    SequenceNumbers      []uint64
-
-    // Timing data
-    FirstPacketTime      time.Time
-    LastPacketTime       time.Time
-    
-    // Score calculation
-    TotalScore           int
-    DetectionConfidence  float64
+func (a *XTLSAnalyzer) Name() string {
+    return "XTLSAnalyzer"
 }
 
-// XTLSStream represents an analyzed TCP stream
+func (a *XTLSAnalyzer) Limit() int {
+    return 16384
+}
+
+func (a *XTLSAnalyzer) NewTCP(info analyzer.TCPInfo, logger analyzer.Logger) analyzer.TCPStream {
+    return newXTLSStream(logger)
+}
+
 type xtlsStream struct {
-    logger         analyzer.Logger
-    info           analyzer.TCPInfo
-    stats          XTLSDetectionStats
-    buffer         []byte
-    lastPacketTime time.Time
-    upstreamAddr   string
+    logger    analyzer.Logger
+    active    bool
+    upCount   int
+    downCount int
+    stats     XTLSDetectionStats
 }
 
-// TLS Record Header
-type tlsRecordHeader struct {
-    Type    byte
-    Version uint16
-    Length  uint16
+func newXTLSStream(logger analyzer.Logger) *xtlsStream {
+    return &xtlsStream{logger: logger}
 }
 
 func (s *xtlsStream) analyzeTLSRecord(data []byte) (*tlsRecordHeader, error) {
@@ -103,7 +98,6 @@ func (s *xtlsStream) analyzeTLSRecord(data []byte) (*tlsRecordHeader, error) {
     return header, nil
 }
 
-// detectXTLSPatterns 检测 XTLS 的特征模式
 func (s *xtlsStream) detectXTLSPatterns(data []byte, rev bool) {
     now := time.Now()
     
@@ -176,69 +170,47 @@ func (s *xtlsStream) detectXTLSPatterns(data []byte, rev bool) {
     s.lastPacketTime = now
 }
 
-// Feed processes incoming TCP data
 func (s *xtlsStream) Feed(rev, start, end bool, skip int, data []byte) (u *analyzer.PropUpdate, done bool) {
-    if skip != 0 || len(data) == 0 {
+    if skip != 0 {
+        return nil, true
+    }
+    if len(data) == 0 {
         return nil, false
     }
-
-    s.detectXTLSPatterns(data, rev)
-
-    // 在连接结束时进行最终分析
-    if end {
-        s.calculateDetectionConfidence()
-        
-        return &analyzer.PropUpdate{
-            Type: analyzer.PropUpdateReplace,
-            M: analyzer.PropMap{
-                "is_xtls":            s.stats.TotalScore >= XTLSBlockThreshold,
-                "confidence":         s.stats.DetectionConfidence,
-                "alert_pattern":      s.stats.AlertPatternFound,
-                "rtt_differential":   s.stats.RTTDifferential,
-                "version_mismatch":   s.stats.VersionMismatch,
-                "nonce_exposed":      s.stats.NonceExposed,
-                "total_score":        s.stats.TotalScore,
-            },
-        }, true
+    if !rev && !s.active && len(data) >= 6 && bytes.Equal(data[:6], trojanClassicCCS) {
+        // Client CCS encountered, start counting
+        s.active = true
     }
-
-    return nil, false
+    if s.active {
+        s.detectXTLSPatterns(data, rev)
+        if rev {
+            // Down direction
+            s.downCount += len(data)
+        } else {
+            // Up direction
+            if s.upCount >= trojanClassicUpLB && s.upCount <= trojanClassicUpUB &&
+                ((s.downCount >= trojanClassicDownLB1 && s.downCount <= trojanClassicDownUB1) ||
+                    (s.downCount >= trojanClassicDownLB2 && s.downCount <= trojanClassicDownUB2)) {
+                return &analyzer.PropUpdate{
+                    Type: analyzer.PropUpdateReplace,
+                    M: analyzer.PropMap{
+                        "up":   s.upCount,
+                        "down": s.downCount,
+                        "yes":  true,
+                    },
+                }, true
+            }
+            s.upCount += len(data)
+        }
+    }
+    // Give up when either direction is over the limit
+    return nil, s.upCount > trojanClassicUpUB || s.downCount > trojanClassicDownUB2
 }
 
-// calculateDetectionConfidence 计算检测置信度
-func (s *xtlsStream) calculateDetectionConfidence() {
-    // 基于多个特征的加权计算
-    totalWeight := 0.0
-    weightedScore := 0.0
-
-    // Alert pattern weight (40%)
-    if s.stats.AlertPatternFound {
-        weightedScore += 40.0
-    }
-    totalWeight += 40.0
-
-    // RTT differential weight (30%)
-    if s.stats.RTTDifferential > float64(rttThreshold) {
-        weightedScore += 30.0 * (s.stats.RTTDifferential / float64(rttThreshold))
-    }
-    totalWeight += 30.0
-
-    // Version mismatch weight (15%)
-    if s.stats.VersionMismatch {
-        weightedScore += 15.0
-    }
-    totalWeight += 15.0
-
-    // Nonce exposure weight (15%)
-    if s.stats.NonceExposed {
-        weightedScore += 15.0
-    }
-    totalWeight += 15.0
-
-    s.stats.DetectionConfidence = (weightedScore / totalWeight) * 100.0
+func (s *xtlsStream) Close(limited bool) *analyzer.PropUpdate {
+    return nil
 }
 
-// Helper functions
 func average(durations []time.Duration) time.Duration {
     if len(durations) == 0 {
         return 0
