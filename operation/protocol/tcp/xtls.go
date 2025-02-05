@@ -1,13 +1,8 @@
 package tcp
 
 import (
-    "bytes"
     "encoding/binary"
-    "encoding/json"
     "fmt"
-    "os"
-    "path/filepath"
-    "sync"
     "time"
 
     "github.com/uQUIC/XGFW/operation/protocol"
@@ -17,9 +12,9 @@ import (
 const (
     // TLS record types
     recordTypeHandshake     = 22
-    recordTypeAlert        = 21
-    recordTypeApplication  = 23
-    recordTypeChangeCipher = 20
+    recordTypeAlert         = 21
+    recordTypeApplication   = 23
+    recordTypeChangeCipher  = 20
 
     // TLS versions
     TLS10 = 0x0301
@@ -39,9 +34,12 @@ const (
     
     // Scoring system
     alertPatternScore   = 5
-    rttDiffScore       = 3
+    rttDiffScore        = 3
     versionMismatchScore = 4
     nonceExposureScore  = 3
+
+    // Define the missing constant
+    XTLSBlockThreshold  = 10  // Example value, adjust as necessary
 )
 
 // XTLSDetectionStats 存储单个连接的检测统计
@@ -50,28 +48,28 @@ type XTLSDetectionStats struct {
     AlertPatternFound    bool
     AlertRecordCount     int
     LastAlertSize        int
-    AlertTimings        []time.Duration
+    AlertTimings         []time.Duration
 
     // RTT analysis
-    UpstreamRTTs        []time.Duration
-    LocalRTTs           []time.Duration
-    RTTDifferential     float64
+    UpstreamRTTs         []time.Duration
+    LocalRTTs            []time.Duration
+    RTTDifferential      float64
 
     // Version detection
-    TLSVersion          uint16
-    VersionMismatch     bool
+    TLSVersion           uint16
+    VersionMismatch      bool
     
     // Nonce exposure (TLS 1.2)
-    NonceExposed        bool
-    SequenceNumbers     []uint64
+    NonceExposed         bool
+    SequenceNumbers      []uint64
 
     // Timing data
-    FirstPacketTime     time.Time
-    LastPacketTime      time.Time
+    FirstPacketTime      time.Time
+    LastPacketTime       time.Time
     
     // Score calculation
-    TotalScore          int
-    DetectionConfidence float64
+    TotalScore           int
+    DetectionConfidence  float64
 }
 
 // XTLSStream represents an analyzed TCP stream
