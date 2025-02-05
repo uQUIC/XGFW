@@ -1,259 +1,205 @@
 package tcp
 
-// ... (保持原有的 imports)
+import (
+    "bytes"
+    "encoding/binary"
+    "encoding/json"
+    "fmt"
+    "os"
+    "path/filepath"
+    "sync"
+    "time"
 
-// XTLS specific constants
+    "github.com/uQUIC/XGFW/operation/protocol"
+)
+
+// XTLS 检测相关的常量定义
 const (
-    // Alert patterns
-    recordTypeAlert     = 21
-    recordTypeHandshake = 22
-    tlsVersion12       = 0x0303
-    tlsVersion13       = 0x0304
-    
-    // Configuration for IP blocking
-    XTLSResultFile    = "xtls_result.json"
-    XTLSBlockFile     = "xtls_block.json"
-    XTLSBasePath      = "/var/log/xgfw"
+    // TLS record types
+    recordTypeHandshake     = 22
+    recordTypeAlert        = 21
+    recordTypeApplication  = 23
+    recordTypeChangeCipher = 20
+
+    // TLS versions
+    TLS10 = 0x0301
+    TLS11 = 0x0302
+    TLS12 = 0x0303
+    TLS13 = 0x0304
+
+    // Alert related constants
+    closeNotifyAlert    = 0
+    warningAlertLevel   = 1
+    fatalAlertLevel     = 2
+
+    // Detection thresholds
+    minTLS13RecordSize  = 31
+    maxTLS13RecordSize  = 65535
+    rttThreshold        = 10 * time.Millisecond
     
     // Scoring system
-    AlertPatternScore    = 5
-    VersionMismatchScore = 3
-    NonceExposureScore   = 2
-    BlockThreshold       = 20
+    alertPatternScore   = 5
+    rttDiffScore       = 3
+    versionMismatchScore = 4
+    nonceExposureScore  = 3
 )
 
-// XTLSIPStats represents the statistics for a single IP
-type XTLSIPStats struct {
-    IP              string    `json:"ip"`
-    Score           int       `json:"score"`
-    FirstSeen       time.Time `json:"first_seen"`
-    LastSeen        time.Time `json:"last_seen"`
-    AlertCount      int       `json:"alert_count"`
-    VersionMismatch int       `json:"version_mismatch"`
-    NonceExposed    int       `json:"nonce_exposed"`
-    TotalConnections int      `json:"total_connections"`
-}
+// XTLSDetectionStats 存储单个连接的检测统计
+type XTLSDetectionStats struct {
+    // Alert pattern detection
+    AlertPatternFound    bool
+    AlertRecordCount     int
+    LastAlertSize        int
+    AlertTimings        []time.Duration
 
-// XTLSResults holds all IP statistics
-type XTLSResults struct {
-    IPList []XTLSIPStats `json:"ip_list"`
-    mu     sync.Mutex
-}
+    // RTT analysis
+    UpstreamRTTs        []time.Duration
+    LocalRTTs           []time.Duration
+    RTTDifferential     float64
 
-// Global variables for XTLS detection
-var (
-    xtlsResults    *XTLSResults
-    xtlsBlockedIPs map[string]struct{}
-    xtlsMutex      sync.RWMutex
-    xtlsInitialized bool
-)
-
-// xtlsStream represents a TCP stream being analyzed
-type xtlsStream struct {
-    logger        analyzer.Logger
-    info          analyzer.TCPInfo
-    buffer        []byte
-    alertFound    bool
-    versionSeen   uint16
-    nonceExposed  bool
-    streamStart   time.Time
-    lastSeenAlert time.Time
-    alertCount    int
-    seqNumbers    []uint64
-}
-
-// Initialize XTLS statistics system
-func initXTLSStats() error {
-    if xtlsInitialized {
-        return nil
-    }
-    xtlsMutex.Lock()
-    defer xtlsMutex.Unlock()
-
-    if xtlsInitialized {
-        return nil
-    }
-
-    if err := os.MkdirAll(XTLSBasePath, 0755); err != nil {
-        return fmt.Errorf("failed to create XTLS base directory: %w", err)
-    }
-
-    xtlsResults = &XTLSResults{
-        IPList: make([]XTLSIPStats, 0),
-    }
-    xtlsBlockedIPs = make(map[string]struct{})
-
-    // Load existing results
-    if err := loadXTLSResults(); err != nil {
-        return err
-    }
-
-    // Load blocked IPs
-    if err := loadXTLSBlockList(); err != nil {
-        return err
-    }
-
-    xtlsInitialized = true
-    return nil
-}
-
-// Update XTLS IP statistics
-func updateXTLSStats(ip string, stats *xtlsStream) error {
-    if err := initXTLSStats(); err != nil {
-        return err
-    }
-
-    xtlsResults.mu.Lock()
-    defer xtlsResults.mu.Unlock()
-
-    // Check if IP is already blocked
-    if _, blocked := xtlsBlockedIPs[ip]; blocked {
-        return nil
-    }
-
-    now := time.Now()
-    var found bool
+    // Version detection
+    TLSVersion          uint16
+    VersionMismatch     bool
     
-    // Calculate current detection score
-    score := 0
-    if stats.alertFound {
-        score += AlertPatternScore
-    }
-    if stats.versionSeen == tlsVersion12 && stats.nonceExposed {
-        score += NonceExposureScore
+    // Nonce exposure (TLS 1.2)
+    NonceExposed        bool
+    SequenceNumbers     []uint64
+
+    // Timing data
+    FirstPacketTime     time.Time
+    LastPacketTime      time.Time
+    
+    // Score calculation
+    TotalScore          int
+    DetectionConfidence float64
+}
+
+// XTLSStream represents an analyzed TCP stream
+type xtlsStream struct {
+    logger         analyzer.Logger
+    info           analyzer.TCPInfo
+    stats          XTLSDetectionStats
+    buffer         []byte
+    lastPacketTime time.Time
+    upstreamAddr   string
+}
+
+// TLS Record Header
+type tlsRecordHeader struct {
+    Type    byte
+    Version uint16
+    Length  uint16
+}
+
+func (s *xtlsStream) analyzeTLSRecord(data []byte) (*tlsRecordHeader, error) {
+    if len(data) < 5 {
+        return nil, fmt.Errorf("insufficient data for TLS record header")
     }
 
-    // Update existing IP stats
-    for i := range xtlsResults.IPList {
-        if xtlsResults.IPList[i].IP == ip {
-            xtlsResults.IPList[i].LastSeen = now
-            xtlsResults.IPList[i].TotalConnections++
-            xtlsResults.IPList[i].Score += score
-            
-            if stats.alertFound {
-                xtlsResults.IPList[i].AlertCount++
-            }
-            if stats.nonceExposed {
-                xtlsResults.IPList[i].NonceExposed++
-            }
-            
-            found = true
+    header := &tlsRecordHeader{
+        Type:    data[0],
+        Version: binary.BigEndian.Uint16(data[1:3]),
+        Length:  binary.BigEndian.Uint16(data[3:5]),
+    }
 
-            // Check if score exceeds threshold
-            if xtlsResults.IPList[i].Score >= BlockThreshold {
-                if err := addToXTLSBlockList(ip); err != nil {
-                    return fmt.Errorf("failed to add IP to XTLS block list: %w", err)
+    return header, nil
+}
+
+// detectXTLSPatterns 检测 XTLS 的特征模式
+func (s *xtlsStream) detectXTLSPatterns(data []byte, rev bool) {
+    now := time.Now()
+    
+    // 1. Alert Pattern Detection
+    if !rev {
+        if header, err := s.analyzeTLSRecord(data); err == nil {
+            if header.Type == recordTypeAlert {
+                s.stats.AlertRecordCount++
+                s.stats.LastAlertSize = int(header.Length)
+                s.stats.AlertTimings = append(s.stats.AlertTimings, time.Since(s.lastPacketTime))
+
+                // 检查典型的 XTLS alert pattern
+                if header.Length == 26 && len(data) >= 7 {
+                    alertLevel := data[5]
+                    alertDesc := data[6]
+                    if alertLevel == warningAlertLevel && alertDesc == closeNotifyAlert {
+                        s.stats.AlertPatternFound = true
+                        s.stats.TotalScore += alertPatternScore
+                    }
                 }
             }
-            break
         }
     }
 
-    // Add new IP if not found
-    if !found {
-        xtlsResults.IPList = append(xtlsResults.IPList, XTLSIPStats{
-            IP:               ip,
-            Score:            score,
-            FirstSeen:        now,
-            LastSeen:         now,
-            AlertCount:       stats.alertCount,
-            NonceExposed:     boolToInt(stats.nonceExposed),
-            TotalConnections: 1,
-        })
+    // 2. RTT Analysis
+    packetRTT := time.Since(s.lastPacketTime)
+    if rev {
+        s.stats.UpstreamRTTs = append(s.stats.UpstreamRTTs, packetRTT)
+    } else {
+        s.stats.LocalRTTs = append(s.stats.LocalRTTs, packetRTT)
     }
 
-    return saveXTLSResults()
+    // 计算 RTT 差异
+    if len(s.stats.UpstreamRTTs) > 0 && len(s.stats.LocalRTTs) > 0 {
+        avgUpstreamRTT := average(s.stats.UpstreamRTTs)
+        avgLocalRTT := average(s.stats.LocalRTTs)
+        s.stats.RTTDifferential = float64(avgUpstreamRTT - avgLocalRTT)
+        
+        if abs(s.stats.RTTDifferential) > float64(rttThreshold) {
+            s.stats.TotalScore += rttDiffScore
+        }
+    }
+
+    // 3. Version Detection
+    if header, err := s.analyzeTLSRecord(data); err == nil {
+        if s.stats.TLSVersion == 0 {
+            s.stats.TLSVersion = header.Version
+        } else if header.Version != s.stats.TLSVersion {
+            s.stats.VersionMismatch = true
+            s.stats.TotalScore += versionMismatchScore
+        }
+
+        // 4. Nonce Exposure Detection (TLS 1.2)
+        if s.stats.TLSVersion == TLS12 {
+            if len(data) >= 13 { // TLS 1.2 explicit nonce size
+                seqNum := binary.BigEndian.Uint64(data[5:13])
+                s.stats.SequenceNumbers = append(s.stats.SequenceNumbers, seqNum)
+                if len(s.stats.SequenceNumbers) > 1 {
+                    // Check if sequence numbers are predictable
+                    if isSequential(s.stats.SequenceNumbers) {
+                        s.stats.NonceExposed = true
+                        s.stats.TotalScore += nonceExposureScore
+                    }
+                }
+            }
+        }
+    }
+
+    // Update timing information
+    s.lastPacketTime = now
 }
 
+// Feed processes incoming TCP data
 func (s *xtlsStream) Feed(rev, start, end bool, skip int, data []byte) (u *analyzer.PropUpdate, done bool) {
     if skip != 0 || len(data) == 0 {
         return nil, false
     }
 
-    // Focus on client -> server direction
-    if !rev {
-        s.buffer = append(s.buffer, data...)
-        
-        // Analyze TLS records in buffer
-        offset := 0
-        for offset < len(s.buffer) {
-            if len(s.buffer[offset:]) < 5 {
-                break
-            }
-            
-            recordType := s.buffer[offset]
-            version := binary.BigEndian.Uint16(s.buffer[offset+1:])
-            length := binary.BigEndian.Uint16(s.buffer[offset+3:])
-            
-            if offset+5+int(length) > len(s.buffer) {
-                break
-            }
+    s.detectXTLSPatterns(data, rev)
 
-            // Original XTLS alert pattern detection
-            if recordType == recordTypeAlert {
-                if s := len(s.buffer) - 31; s >= 0 && s.buffer[s] == 21 {
-                    if bytes.Equal(s.buffer[s:s+5], []byte{21, 3, 3, 0, 26}) {
-                        s.alertFound = true
-                        s.alertCount++
-                        s.lastSeenAlert = time.Now()
-                    }
-                }
-            }
-
-            // Version tracking
-            if s.versionSeen == 0 {
-                s.versionSeen = version
-            }
-
-            // TLS 1.2 nonce exposure detection
-            if version == tlsVersion12 && len(s.buffer[offset:]) >= 13 {
-                seqNum := binary.BigEndian.Uint64(s.buffer[offset+5:offset+13])
-                s.seqNumbers = append(s.seqNumbers, seqNum)
-                if len(s.seqNumbers) >= 2 {
-                    // Check for sequential numbers indicating exposure
-                    if isSequentialNumbers(s.seqNumbers[len(s.seqNumbers)-2:]) {
-                        s.nonceExposed = true
-                    }
-                }
-            }
-
-            offset += 5 + int(length)
-        }
-
-        // Maintain buffer size
-        if len(s.buffer) > 65536 {
-            s.buffer = s.buffer[len(s.buffer)-65536:]
-        }
-    }
-
-    // Final analysis on connection end
+    // 在连接结束时进行最终分析
     if end {
-        dstIP := s.info.DstIP.String()
+        s.calculateDetectionConfidence()
         
-        // Check if IP is already blocked
-        _, blocked := xtlsBlockedIPs[dstIP]
-        if blocked {
-            return &analyzer.PropUpdate{
-                Type: analyzer.PropUpdateReplace,
-                M: analyzer.PropMap{
-                    "is_xtls": true,
-                    "blocked": true,
-                },
-            }, true
-        }
-
-        // Update IP statistics
-        if err := updateXTLSStats(dstIP, s); err != nil {
-            s.logger.Errorf("Failed to update XTLS IP stats: %v", err)
-        }
-
         return &analyzer.PropUpdate{
             Type: analyzer.PropUpdateReplace,
             M: analyzer.PropMap{
-                "is_xtls":        s.alertFound,
-                "alert_count":    s.alertCount,
-                "nonce_exposed":  s.nonceExposed,
-                "version":        s.versionSeen,
+                "is_xtls":            s.stats.TotalScore >= XTLSBlockThreshold,
+                "confidence":         s.stats.DetectionConfidence,
+                "alert_pattern":      s.stats.AlertPatternFound,
+                "rtt_differential":   s.stats.RTTDifferential,
+                "version_mismatch":   s.stats.VersionMismatch,
+                "nonce_exposed":      s.stats.NonceExposed,
+                "total_score":        s.stats.TotalScore,
             },
         }, true
     }
@@ -261,103 +207,67 @@ func (s *xtlsStream) Feed(rev, start, end bool, skip int, data []byte) (u *analy
     return nil, false
 }
 
-// Helper functions
+// calculateDetectionConfidence 计算检测置信度
+func (s *xtlsStream) calculateDetectionConfidence() {
+    // 基于多个特征的加权计算
+    totalWeight := 0.0
+    weightedScore := 0.0
 
-func isSequentialNumbers(numbers []uint64) bool {
+    // Alert pattern weight (40%)
+    if s.stats.AlertPatternFound {
+        weightedScore += 40.0
+    }
+    totalWeight += 40.0
+
+    // RTT differential weight (30%)
+    if s.stats.RTTDifferential > float64(rttThreshold) {
+        weightedScore += 30.0 * (s.stats.RTTDifferential / float64(rttThreshold))
+    }
+    totalWeight += 30.0
+
+    // Version mismatch weight (15%)
+    if s.stats.VersionMismatch {
+        weightedScore += 15.0
+    }
+    totalWeight += 15.0
+
+    // Nonce exposure weight (15%)
+    if s.stats.NonceExposed {
+        weightedScore += 15.0
+    }
+    totalWeight += 15.0
+
+    s.stats.DetectionConfidence = (weightedScore / totalWeight) * 100.0
+}
+
+// Helper functions
+func average(durations []time.Duration) time.Duration {
+    if len(durations) == 0 {
+        return 0
+    }
+    var sum time.Duration
+    for _, d := range durations {
+        sum += d
+    }
+    return sum / time.Duration(len(durations))
+}
+
+func abs(x float64) float64 {
+    if x < 0 {
+        return -x
+    }
+    return x
+}
+
+func isSequential(numbers []uint64) bool {
     if len(numbers) < 2 {
         return false
     }
     diff := numbers[1] - numbers[0]
-    return diff == 1
-}
-
-func boolToInt(b bool) int {
-    if b {
-        return 1
-    }
-    return 0
-}
-
-// Save XTLS results to file
-func saveXTLSResults() error {
-    data, err := json.MarshalIndent(xtlsResults.IPList, "", "  ")
-    if err != nil {
-        return fmt.Errorf("failed to marshal XTLS results: %w", err)
-    }
-
-    resultPath := filepath.Join(XTLSBasePath, XTLSResultFile)
-    if err := os.WriteFile(resultPath, data, 0644); err != nil {
-        return fmt.Errorf("failed to write XTLS results file: %w", err)
-    }
-
-    return nil
-}
-
-// Load XTLS results from file
-func loadXTLSResults() error {
-    resultPath := filepath.Join(XTLSBasePath, XTLSResultFile)
-    data, err := os.ReadFile(resultPath)
-    if err != nil {
-        if os.IsNotExist(err) {
-            return nil
-        }
-        return fmt.Errorf("failed to read XTLS results file: %w", err)
-    }
-
-    return json.Unmarshal(data, &xtlsResults.IPList)
-}
-
-// Add IP to XTLS block list
-func addToXTLSBlockList(ip string) error {
-    xtlsBlockedIPs[ip] = struct{}{}
-
-    blockPath := filepath.Join(XTLSBasePath, XTLSBlockFile)
-    var blockedList []string
-
-    // Load existing blocked IPs
-    if data, err := os.ReadFile(blockPath); err == nil {
-        if err := json.Unmarshal(data, &blockedList); err != nil {
-            return fmt.Errorf("failed to unmarshal XTLS blocked IPs: %w", err)
+    for i := 2; i < len(numbers); i++ {
+        if numbers[i]-numbers[i-1] != diff {
+            return false
         }
     }
-
-    // Add new IP if not already blocked
-    if !contains(blockedList, ip) {
-        blockedList = append(blockedList, ip)
-    }
-
-    // Save updated block list
-    data, err := json.MarshalIndent(blockedList, "", "  ")
-    if err != nil {
-        return fmt.Errorf("failed to marshal XTLS blocked IPs: %w", err)
-    }
-
-    if err := os.WriteFile(blockPath, data, 0644); err != nil {
-        return fmt.Errorf("failed to write XTLS block file: %w", err)
-    }
-
-    return nil
-}
-
-// Load XTLS block list from file
-func loadXTLSBlockList() error {
-    blockPath := filepath.Join(XTLSBasePath, XTLSBlockFile)
-    data, err := os.ReadFile(blockPath)
-    if err != nil {
-        if os.IsNotExist(err) {
-            return nil
-        }
-        return fmt.Errorf("failed to read XTLS block file: %w", err)
-    }
-
-    var blockedList []string
-    if err := json.Unmarshal(data, &blockedList); err != nil {
-        return fmt.Errorf("failed to unmarshal XTLS blocked IPs: %w", err)
-    }
-
-    for _, ip := range blockedList {
-        xtlsBlockedIPs[ip] = struct{}{}
-    }
-
-    return nil
+    return true
 }
